@@ -319,12 +319,18 @@ const els = {
 };
 
 /* ------------------------------ Persistence --------------------------- */
-const saveSnapshot = debounce(() => {
+function writeSnapshot() {
   try {
     const snapshot = exportSnapshot({ historyDays: 120 });
     localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot));
   } catch {}
-}, 800);
+}
+
+const saveSnapshot = debounce(writeSnapshot, 800);
+
+window.addEventListener('pagehide', () => {
+  writeSnapshot();
+});
 
 function exportSnapshot({ historyDays = 120 } = {}) {
   const tasks = [];
@@ -438,9 +444,7 @@ function importSnapshot(snapshot) {
   });
 }
 
-async function bootstrapFromLocalStorageIfEmpty() {
-  const isEmpty = yTasks.size === 0 && yTemplates.size === 0;
-  if (!isEmpty) return;
+async function bootstrapFromLocalStorage() {
   const raw = localStorage.getItem(SNAPSHOT_KEY);
   if (!raw) return;
   try { importSnapshot(JSON.parse(raw)); } catch {}
@@ -1033,7 +1037,7 @@ setInterval(() => scheduleRender(), 30 * 1000);
   setDefaultsAndHydrateInputs();
 
   await persistence.whenSynced;
-  await bootstrapFromLocalStorageIfEmpty();
+  await bootstrapFromLocalStorage();
 
   rebuildTemplateIndex();
   await connectSync();
