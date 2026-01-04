@@ -395,12 +395,12 @@ function importSnapshot(snapshot) {
           yt = new Y.Map();
           yTemplates.set(key, yt);
         }
-        yt.set('title', String(t.title || key));
-        yt.set('usageCount', Number(t.usageCount || 0));
-        yt.set('firstUsedAt', Number(t.firstUsedAt || 0));
-        yt.set('lastUsedAt', Number(t.lastUsedAt || 0));
-        yt.set('meanMinutes', Number(t.meanMinutes || 0));
-        yt.set('lastType', String(t.lastType || 'daily'));
+        if (!yt.has('title')) yt.set('title', String(t.title || key));
+        if (!yt.has('usageCount')) yt.set('usageCount', Number(t.usageCount || 0));
+        if (!yt.has('firstUsedAt')) yt.set('firstUsedAt', Number(t.firstUsedAt || 0));
+        if (!yt.has('lastUsedAt')) yt.set('lastUsedAt', Number(t.lastUsedAt || 0));
+        if (!yt.has('meanMinutes')) yt.set('meanMinutes', Number(t.meanMinutes || 0));
+        if (!yt.has('lastType')) yt.set('lastType', String(t.lastType || 'daily'));
       }
     }
 
