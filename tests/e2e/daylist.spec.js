@@ -7,13 +7,22 @@ const __dirname = path.dirname(__filename);
 const appUrl = pathToFileURL(path.resolve(__dirname, '../../index.html')).href;
 
 const resetStorage = async (page) => {
-  await page.addInitScript(() => localStorage.clear());
+  await page.goto(appUrl);
+  await page.evaluate(async () => {
+    localStorage.clear();
+    await new Promise((resolve) => {
+      const request = indexedDB.deleteDatabase('daylist-v1');
+      request.onsuccess = () => resolve();
+      request.onerror = () => resolve();
+      request.onblocked = () => resolve();
+    });
+  });
+  await page.reload();
 };
 
 test.describe('DayList e2e', () => {
   test('adds a daily task to today list', async ({ page }) => {
     await resetStorage(page);
-    await page.goto(appUrl);
 
     const taskTitle = 'Drink water';
     await page.fill('#titleInput', taskTitle);
@@ -25,7 +34,6 @@ test.describe('DayList e2e', () => {
 
   test('adds a scheduled task to upcoming list', async ({ page }) => {
     await resetStorage(page);
-    await page.goto(appUrl);
 
     const taskTitle = 'Pay rent';
     await page.click('#typeScheduled');
