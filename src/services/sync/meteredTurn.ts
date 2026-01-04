@@ -7,8 +7,24 @@ const LS_METERED_ICE_CACHE = 'daylist.meteredIceCache.v1';
 
 const STUN_FALLBACK: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:global.stun.twilio.com:3478?transport=udp' }
+  { urls: 'stun:stun1.l.google.com:19302' }
 ];
+
+const VALID_SCHEMES = ['stun:', 'stuns:', 'turn:', 'turns:'];
+
+const normalizeIceServers = (servers: RTCIceServer[]) =>
+  servers
+    .map((server) => {
+      if (!server || typeof server !== 'object') return null;
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      const cleaned = urls.filter((url) => typeof url === 'string' && VALID_SCHEMES.some((s) => url.startsWith(s)));
+      if (!cleaned.length) return null;
+      return {
+        ...server,
+        urls: cleaned
+      } as RTCIceServer;
+    })
+    .filter((server): server is RTCIceServer => !!server);
 
 function meteredUrl(apiKey: string) {
   const u = new URL(METERED_TURN_ENDPOINT);
@@ -59,7 +75,7 @@ export async function getIceServers(opts: {
 }): Promise<RTCIceServer[]> {
   if (opts.allowTurn === false) {
     opts.log?.('turn:skipped_stun_only');
-    return STUN_FALLBACK;
+    return normalizeIceServers(STUN_FALLBACK);
   }
 
   const key = (opts.turnKey || '').trim();
@@ -70,7 +86,12 @@ export async function getIceServers(opts: {
 
   if (cached && age != null && age < METERED_CACHE_TTL_MS && isValidIceServers(cached.iceServers)) {
     opts.log?.('turn:cache_hit_fresh', { ageMs: age, count: cached.iceServers.length });
-    return cached.iceServers;
+    const sanitized = normalizeIceServers(cached.iceServers);
+    if (!sanitized.length) {
+      opts.log?.('turn:cache_invalid_fallback', { ageMs: age }, 'WARN');
+      return normalizeIceServers(STUN_FALLBACK);
+    }
+    return sanitized;
   }
 
   try {
@@ -83,7 +104,12 @@ export async function getIceServers(opts: {
       count: iceServers.length,
       sample: iceServers.slice(0, 2).map((s: RTCIceServer) => ({ urls: s.urls }))
     });
-    return iceServers;
+    const sanitized = normalizeIceServers(iceServers);
+    if (!sanitized.length) {
+      opts.log?.('turn:fetched_invalid_fallback', { count: iceServers.length }, 'WARN');
+      return normalizeIceServers(STUN_FALLBACK);
+    }
+    return sanitized;
   } catch (e) {
     if (cached && isValidIceServers(cached.iceServers)) {
       opts.log?.(
@@ -91,9 +117,14 @@ export async function getIceServers(opts: {
         { error: toJsonSafe(errToObj(e)), ageMs: age, count: cached.iceServers.length },
         'WARN'
       );
-      return cached.iceServers;
+      const sanitized = normalizeIceServers(cached.iceServers);
+      if (!sanitized.length) {
+        opts.log?.('turn:stale_invalid_fallback', { ageMs: age }, 'WARN');
+        return normalizeIceServers(STUN_FALLBACK);
+      }
+      return sanitized;
     }
     opts.log?.('turn:fetch_failed_stun_only', { error: toJsonSafe(errToObj(e)) }, 'WARN');
-    return STUN_FALLBACK;
+    return normalizeIceServers(STUN_FALLBACK);
   }
 }
