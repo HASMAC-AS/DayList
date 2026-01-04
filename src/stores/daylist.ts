@@ -59,6 +59,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const webrtcPeers = ref<string[]>([]);
   const bcPeers = ref<string[]>([]);
   const recentPeers = ref<string[]>([]);
+  const pendingTaskIds = ref<string[]>([]);
 
   const ydocHandles = shallowRef<YDocHandles | null>(null);
   const provider = shallowRef<WebrtcProvider | null>(null);
@@ -119,6 +120,14 @@ export const useDaylistStore = defineStore('daylist', () => {
       persistRecentPeers(trimmed);
     }
   };
+
+  const markTaskPending = (id: string) => {
+    if (!id) return;
+    if (pendingTaskIds.value.includes(id)) return;
+    pendingTaskIds.value = [...pendingTaskIds.value, id];
+  };
+
+  const isTaskSyncing = (id: string) => pendingTaskIds.value.includes(id);
 
   const { show: toast } = useToastBus();
 
@@ -260,6 +269,9 @@ export const useDaylistStore = defineStore('daylist', () => {
   const updateSyncBadge = () => {
     peerCount.value = getPeerCount(provider.value);
     providerConnected.value = provider.value?.connected ?? false;
+    if (peerCount.value > 0 && providerConnected.value && pendingTaskIds.value.length) {
+      pendingTaskIds.value = [];
+    }
   };
 
   const clearTurnUpgradeTimer = () => {
@@ -427,17 +439,12 @@ export const useDaylistStore = defineStore('daylist', () => {
     if (!title) return;
 
     let dueAt = input.dueAt;
-    if (input.type === 'scheduled') {
-      if (!dueAt) {
-        const now = Date.now();
-        const rounded = Math.ceil((now + 30 * 60000) / (5 * 60000)) * (5 * 60000);
-        dueAt = rounded;
-      }
-    } else {
+    if (input.type !== 'scheduled') {
       dueAt = null;
     }
 
     const id = crypto.randomUUID();
+    const needsSync = peerCount.value === 0 || !providerConnected.value;
 
     ydocHandles.value.ydoc.transact(() => {
       const ytask = new Y.Map();
@@ -454,6 +461,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       ydocHandles.value?.yTasks.set(id, ytask);
     });
 
+    if (needsSync) markTaskPending(id);
     snapshotMirror.value?.flush('addTask', true);
   };
 
@@ -858,6 +866,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     exportJson,
     importJson,
     wipeLocal,
+    isTaskSyncing,
     buildSuggestions,
     parseDueInput,
     formatDueInput,

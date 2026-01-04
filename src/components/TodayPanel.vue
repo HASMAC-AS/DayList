@@ -8,6 +8,7 @@
           :key="task.id"
           :task="task"
           :day-key="sections.dayKey"
+          :syncing="store.isTaskSyncing(task.id)"
           @toggle="store.toggleCompletion"
           @archive="store.archiveTask"
           @activate="(id) => store.setTaskActive(id, true)"
@@ -23,6 +24,7 @@
           :key="task.id"
           :task="task"
           :day-key="sections.dayKey"
+          :syncing="store.isTaskSyncing(task.id)"
           @toggle="store.toggleCompletion"
           @archive="store.archiveTask"
           @activate="(id) => store.setTaskActive(id, true)"
@@ -43,6 +45,7 @@
             :key="task.id"
             :task="task"
             :day-key="sections.dayKey"
+            :syncing="store.isTaskSyncing(task.id)"
             upcoming
             @toggle="store.toggleCompletion"
             @archive="store.archiveTask"

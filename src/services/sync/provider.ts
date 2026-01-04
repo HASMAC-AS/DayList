@@ -27,7 +27,6 @@ export async function connectProvider(opts: {
   enc: string;
   signaling: string[];
   iceServers: RTCIceServer[];
-  preferredPeers?: string[];
   onAwarenessChange: () => void;
   onStatus?: (status: { connected: boolean }) => void;
   onSignalingStatus?: (status: SignalingStatus) => void;
@@ -262,17 +261,6 @@ export async function connectProvider(opts: {
     pendingPeers.clear();
   };
 
-  const tryPreferredPeers = (reason: string) => {
-    if (!opts.preferredPeers || opts.preferredPeers.length === 0) return;
-    const conn = getAnyConn();
-    if (!conn) return;
-    const room = getRoom();
-    if (!room) return;
-    opts.preferredPeers.forEach((peerId) => {
-      ensureWebrtcConn(peerId, conn, `preferred:${reason}`);
-    });
-  };
-
   const sendResync = (peerId: string, reason: string) => {
     const room = getRoom();
     if (!room) return false;
@@ -406,7 +394,6 @@ export async function connectProvider(opts: {
     keyPromise
       .then(() => {
         maybeFlushPending();
-        tryPreferredPeers('room_ready');
       })
       .catch(() => {});
   }
@@ -482,7 +469,6 @@ export async function connectProvider(opts: {
         resetSendTimer();
       }
       flushPendingPeers('signaling_connect');
-      tryPreferredPeers('signaling_connect');
     });
     conn.on('disconnect', () => {
       updateStatus();

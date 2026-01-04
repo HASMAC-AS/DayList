@@ -29,18 +29,21 @@
       </label>
       <div class="main">
         <div class="rowline">
-          <div
-            class="title"
-            :class="{ done: completed }"
-            title="Double-click to rename"
-            @dblclick="onRename"
-          >
-            {{ task.title }}
+          <div class="title-wrap">
+            <div
+              class="title"
+              :class="{ done: completed }"
+              title="Double-click to rename"
+              @dblclick="onRename"
+            >
+              {{ task.title }}
+            </div>
+            <span v-if="syncing" class="sync-spinner" aria-hidden="true"></span>
           </div>
           <span v-if="task.type === 'scheduled' && task.dueAt" class="time">{{ dueLabel }}</span>
         </div>
         <div class="meta">
-          <span class="tag">{{ task.type === 'scheduled' ? 'scheduled' : 'daily' }}</span>
+          <span class="tag">{{ task.type === 'scheduled' ? 'one-off' : 'daily' }}</span>
           <span v-if="upcoming" class="tag">upcoming</span>
         </div>
       </div>
@@ -54,7 +57,7 @@ import { formatDateTime } from '../lib/core';
 import { isCompletedForDay } from '../lib/todayModel';
 import type { Task } from '../lib/types';
 
-const props = defineProps<{ task: Task; dayKey: string; upcoming?: boolean }>();
+const props = defineProps<{ task: Task; dayKey: string; upcoming?: boolean; syncing?: boolean }>();
 
 const emit = defineEmits<{
   toggle: [string, boolean];

@@ -20,10 +20,10 @@
       </label>
       <label class="radio">
         <input id="typeScheduled" v-model="type" type="radio" name="t" value="scheduled" />
-        Scheduled
+        One-off
       </label>
       <div class="grow" style="min-width: 220px">
-        <div class="hint">Due time (only for scheduled tasks)</div>
+        <div class="hint">Due time (optional)</div>
         <input
           id="dueInput"
           v-model="dueInput"
@@ -54,7 +54,7 @@ const emit = defineEmits<{ close: []; added: [] }>();
 const store = useDaylistStore();
 
 const title = ref('');
-const type = ref<TaskType>('daily');
+const type = ref<TaskType>('scheduled');
 const dueInput = ref('');
 
 const suggestions = computed(() => store.buildSuggestions(title.value.trim()));
@@ -62,8 +62,6 @@ const suggestions = computed(() => store.buildSuggestions(title.value.trim()));
 const ensureDefaultDue = () => {
   if (type.value !== 'scheduled') return;
   if (dueInput.value) return;
-  const next = store.buildDefaultDue();
-  dueInput.value = store.formatDueInput(next);
 };
 
 const handleAdd = () => {

@@ -9,6 +9,7 @@
           :key="task.id"
           :task="task"
           :day-key="sections.dayKey"
+          :syncing="store.isTaskSyncing(task.id)"
           upcoming
           @toggle="store.toggleCompletion"
           @archive="store.archiveTask"
