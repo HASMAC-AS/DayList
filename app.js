@@ -31,6 +31,7 @@ import {
   toDatetimeLocalValue,
   toJsonSafe
 } from './core.js';
+import { buildTodaySections } from './todayView.js';
 
 /* ------------------------------ Utilities ------------------------------ */
 const DEFAULT_SIGNALING = [
@@ -896,39 +897,6 @@ function taskPlain(ytask) {
   };
 }
 
-function isCompletedToday(task, dayKey) {
-  const m = task.completions;
-  return (m instanceof Y.Map) ? !!m.get(dayKey) : false;
-}
-
-function renderTaskRow(t, dayKey, opts = {}) {
-  const completed = isCompletedToday(t, dayKey);
-  const due = t.type === 'scheduled' && t.dueAt ? `<span class="time">${escapeHtml(formatDateTime(t.dueAt))}</span>` : '';
-  const badge = t.type === 'scheduled' ? '<span class="tag">scheduled</span>' : '<span class="tag">daily</span>';
-  const upcomingHint = opts.upcoming ? '<span class="tag">upcoming</span>' : '';
-  const titleCls = `title ${completed ? 'done' : ''}`;
-
-  return `
-    <div class="task" data-id="${escapeHtml(t.id)}">
-      <label class="check">
-        <input type="checkbox" class="toggle" ${completed ? 'checked' : ''} />
-        <span></span>
-      </label>
-      <div class="main">
-        <div class="rowline">
-          <div class="${titleCls}" title="Double-click to rename">${escapeHtml(t.title)}</div>
-          ${due}
-        </div>
-        <div class="meta">${badge} ${upcomingHint}</div>
-      </div>
-      <div class="actions">
-        ${t.type === 'daily' ? `<button class="chip act" data-act="${t.active ? 'deactivate' : 'activate'}">${t.active ? 'Hide' : 'Show'}</button>` : ''}
-        <button class="chip" data-act="archive">Archive</button>
-      </div>
-    </div>
-  `;
-}
-
 function renderHistory(daysBack = 7) {
   const now = Date.now();
   const out = [];
@@ -967,49 +935,17 @@ function render() {
   els.dayLabel.textContent = `Day: ${dayKey} (resets 03:00 local)`;
   updateSyncBadge();
 
-  const daily = [];
-  const scheduledDue = [];
-  const scheduledUpcoming = [];
-
+  const tasks = [];
   yTasks.forEach((ytask) => {
     if (!(ytask instanceof Y.Map)) return;
-    const t = taskPlain(ytask);
-    if (t.archivedAt) return;
-
-    if (t.type === 'daily') {
-      if (t.active) daily.push(t);
-    } else {
-      const dueAt = t.dueAt || 0;
-      if (dueAt <= now) scheduledDue.push(t);
-      else scheduledUpcoming.push(t);
-    }
+    tasks.push(taskPlain(ytask));
   });
 
-  daily.sort((a, b) => {
-    const ca = isCompletedToday(a, dayKey) ? 1 : 0;
-    const cb = isCompletedToday(b, dayKey) ? 1 : 0;
-    if (ca !== cb) return ca - cb;
-    return a.title.localeCompare(b.title);
-  });
-  scheduledDue.sort((a, b) => (a.dueAt || 0) - (b.dueAt || 0));
-  scheduledUpcoming.sort((a, b) => (a.dueAt || 0) - (b.dueAt || 0));
+  const { todayHtml, upcomingHtml, upcomingCount } = buildTodaySections(tasks, now);
 
-  const todayHtml = [];
-  if (daily.length) {
-    todayHtml.push(`<div class="section-title">Daily</div>`);
-    todayHtml.push(daily.map(t => renderTaskRow(t, dayKey)).join(''));
-  }
-  if (scheduledDue.length) {
-    todayHtml.push(`<div class="section-title">Due now</div>`);
-    todayHtml.push(scheduledDue.map(t => renderTaskRow(t, dayKey)).join(''));
-  }
-  if (!todayHtml.length) todayHtml.push(`<div class="empty">No tasks yet. Add one above 👆</div>`);
-  els.todayList.innerHTML = todayHtml.join('');
-
-  els.upcomingCount.textContent = String(scheduledUpcoming.length);
-  els.upcomingList.innerHTML = scheduledUpcoming.length
-    ? scheduledUpcoming.map(t => renderTaskRow(t, dayKey, { upcoming: true })).join('')
-    : `<div class="empty">Nothing scheduled.</div>`;
+  els.todayList.innerHTML = todayHtml;
+  els.upcomingCount.textContent = String(upcomingCount);
+  els.upcomingList.innerHTML = upcomingHtml;
 
   els.historyList.innerHTML = renderHistory(7);
   renderSuggestions();
