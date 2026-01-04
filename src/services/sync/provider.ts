@@ -31,6 +31,7 @@ export async function connectProvider(opts: {
   onStatus?: (status: { connected: boolean }) => void;
   onSignalingStatus?: (status: SignalingStatus) => void;
   onPeers?: (peers: { webrtcPeers: string[]; bcPeers: string[] }) => void;
+  onPeerSeen?: (info: { peerId?: string; reason: string; at: number; detail?: unknown }) => void;
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
 }): Promise<WebrtcProvider> {
   const STARTUP_BURST_COUNT = 3;
@@ -204,6 +205,7 @@ export async function connectProvider(opts: {
     const localPeerId = getLocalPeerId();
     if (!peerId || peerId === localPeerId) return;
     const now = Date.now();
+    opts.onPeerSeen?.({ peerId, reason, at: now, detail });
     const last = peerLastSeen.get(peerId);
     const stale = last != null && now - last > PEER_STALE_MS;
     const urgent = last == null || now - (last || 0) > PEER_URGENT_MS;

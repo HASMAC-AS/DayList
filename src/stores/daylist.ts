@@ -36,7 +36,9 @@ import { useToastBus } from '../services/toast';
 
 const DEFAULT_SIGNALING = ['wss://daylist-signaling.onrender.com/ws', 'wss://signaling.yjs.dev'];
 const HISTORY_DAYS = 7;
-const TURN_UPGRADE_DELAY_MS = 6000;
+const TURN_UPGRADE_DELAY_MS = 800;
+const TURN_SIGNAL_GRACE_MS = 800;
+const TURN_MAX_WAIT_MS = 4000;
 
 export const useDaylistStore = defineStore('daylist', () => {
   const keys = reactive<SyncKeys>({
@@ -59,6 +61,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const webrtcPeers = ref<string[]>([]);
   const bcPeers = ref<string[]>([]);
   const pendingTaskIds = ref<string[]>([]);
+  const signalingPeerSeenAt = ref(0);
 
   const ydocHandles = shallowRef<YDocHandles | null>(null);
   const provider = shallowRef<WebrtcProvider | null>(null);
@@ -66,6 +69,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const logger = shallowRef<DebugLogger | null>(null);
   const initialized = ref(false);
   let turnUpgradeTimer: number | null = null;
+  let turnUpgradeStartAt = 0;
 
   const logEntries = ref<
     Array<{
@@ -257,6 +261,8 @@ export const useDaylistStore = defineStore('daylist', () => {
   const connectSync = async () => {
     if (!ydocHandles.value) return;
     const hasPeers = () => peerCount.value > 0;
+    const hasRecentSignalPeer = () =>
+      signalingPeerSeenAt.value > 0 && Date.now() - signalingPeerSeenAt.value < TURN_SIGNAL_GRACE_MS;
 
     const maybeSkipTurn = (reason: string) => {
       if (!turnUpgradeTimer) return false;
@@ -291,6 +297,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     const sigList = parseSignalingList(sigRaw);
     const sig = sigList.length ? sigList : DEFAULT_SIGNALING;
     signaling.value = sig;
+    signalingPeerSeenAt.value = 0;
 
     const connectWithIce = async (iceServers: RTCIceServer[], context: string) => {
       const hasTurn = iceServers.some((server) => {
@@ -323,6 +330,9 @@ export const useDaylistStore = defineStore('daylist', () => {
         rebuildDerivedState();
         maybeSkipTurn('awareness');
       },
+      onPeerSeen: (info) => {
+        signalingPeerSeenAt.value = info.at;
+      },
         onStatus: () => {
           updateSyncBadge();
         },
@@ -346,6 +356,8 @@ export const useDaylistStore = defineStore('daylist', () => {
     };
 
     clearTurnUpgradeTimer();
+    turnUpgradeStartAt = 0;
+    let turnPrefetch: Promise<RTCIceServer[]> | null = null;
 
     const stunOnlyIce = await getIceServers({
       turnKey,
@@ -359,7 +371,34 @@ export const useDaylistStore = defineStore('daylist', () => {
     await connectWithIce(stunOnlyIce, 'stun');
 
     if (turnKey) {
-      turnUpgradeTimer = window.setTimeout(async () => {
+      turnPrefetch = getIceServers({
+        turnKey,
+        allowTurn: true,
+        fetchFn: throttledFetch,
+        storage: localStorage,
+        now: () => Date.now(),
+        log: logEvent
+      });
+
+      const scheduleTurnUpgrade = (delayMs: number, reason: string) => {
+        clearTurnUpgradeTimer();
+        if (!turnUpgradeStartAt) turnUpgradeStartAt = Date.now();
+        turnUpgradeTimer = window.setTimeout(runTurnUpgrade, delayMs);
+        logEvent('turn:upgrade_scheduled', { delayMs, reason });
+      };
+
+      const runTurnUpgrade = async () => {
+        if (!turnUpgradeTimer) return;
+        const now = Date.now();
+        if (!turnUpgradeStartAt) turnUpgradeStartAt = now;
+        if (hasRecentSignalPeer() && now - turnUpgradeStartAt < TURN_MAX_WAIT_MS) {
+          logEvent('turn:upgrade_delay_signal', {
+            delayMs: TURN_SIGNAL_GRACE_MS,
+            seenMsAgo: now - signalingPeerSeenAt.value
+          });
+          scheduleTurnUpgrade(TURN_SIGNAL_GRACE_MS, 'signal_recent');
+          return;
+        }
         logEvent('turn:upgrade_check', {
           delayMs: TURN_UPGRADE_DELAY_MS,
           peerCount: peerCount.value,
@@ -377,14 +416,14 @@ export const useDaylistStore = defineStore('daylist', () => {
           return;
         }
 
-        const iceServers = await getIceServers({
+        const iceServers = await (turnPrefetch || getIceServers({
           turnKey,
           allowTurn: true,
           fetchFn: throttledFetch,
           storage: localStorage,
           now: () => Date.now(),
           log: logEvent
-        });
+        }));
 
         if (hasPeers()) {
           logEvent('turn:skip_peers_present', {
@@ -400,7 +439,9 @@ export const useDaylistStore = defineStore('daylist', () => {
         logEvent('turn:upgrade_connecting');
         await connectWithIce(iceServers, 'turn');
         clearTurnUpgradeTimer();
-      }, TURN_UPGRADE_DELAY_MS);
+      };
+
+      scheduleTurnUpgrade(TURN_UPGRADE_DELAY_MS, 'initial');
     }
   };
 
