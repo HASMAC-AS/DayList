@@ -52,6 +52,18 @@ export interface SnapshotV1 {
   history: Record<string, Record<string, number>>;
 }
 
+export interface SnapshotKeys {
+  room: string;
+  enc: string;
+  sig: string;
+  turnKey: string;
+}
+
+export interface SnapshotV2 extends SnapshotV1 {
+  v: 2;
+  keys?: SnapshotKeys;
+}
+
 export interface HistoryDayEntry {
   taskId: string;
   completedAt: number;

@@ -4,12 +4,10 @@
       <div class="logo" aria-hidden="true">OK</div>
       <div>
         <h1>DayList</h1>
-        <div class="sub" id="dayLabel">{{ store.dayLabel }}</div>
       </div>
     </div>
 
     <div class="header-actions">
-      <SyncPill v-if="view === 'main'" />
       <button
         v-if="view === 'main'"
         class="icon-btn"
@@ -23,24 +21,12 @@
           />
         </svg>
       </button>
-      <button
-        v-else
-        class="back-btn"
-        type="button"
-        @click="$emit('closeSettings')"
-      >
-        Back
-      </button>
+      <button v-else class="back-btn" type="button" @click="$emit('back')">Back</button>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
-import SyncPill from './SyncPill.vue';
-import { useDaylistStore } from '../stores/daylist';
-
-defineProps<{ view: 'main' | 'settings' }>();
-defineEmits<{ openSettings: []; closeSettings: [] }>();
-
-const store = useDaylistStore();
+defineProps<{ view: 'main' | 'settings' | 'diagnostics' }>();
+defineEmits<{ openSettings: []; back: [] }>();
 </script>

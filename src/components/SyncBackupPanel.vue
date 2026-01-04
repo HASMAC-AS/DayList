@@ -95,20 +95,20 @@ const exportSnapshot = () => {
   URL.revokeObjectURL(url);
 };
 
-const importSnapshot = async (event: Event) => {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    store.importJson(JSON.parse(text));
+  const importSnapshot = async (event: Event) => {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+    await store.importJson(JSON.parse(text));
     toast('Imported');
-  } catch {
-    toast('Import failed (invalid JSON)');
-  } finally {
-    input.value = '';
-  }
-};
+    } catch {
+      toast('Import failed (invalid JSON)');
+    } finally {
+      input.value = '';
+    }
+  };
 
 const wipeLocal = async () => {
   const ok = window.confirm('This will delete ALL local data (IndexedDB + localStorage mirror). Continue?');

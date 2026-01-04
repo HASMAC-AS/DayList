@@ -16,12 +16,13 @@ import {
   parseSignalingList,
   randomKey,
   suggestionScore,
-  toDatetimeLocalValue
+  toDatetimeLocalValue,
+  toJsonSafe
 } from '../lib/core';
-import type { HistoryDay, Task, TaskType, TemplateStat, SnapshotV1 } from '../lib/types';
+import type { HistoryDay, Task, TaskType, TemplateStat, SnapshotV1, SnapshotV2, SnapshotKeys } from '../lib/types';
 import { createDebugLogger, bindDebugWindow, type DebugLogger } from '../services/sync/debugLog';
 import { getIceServers } from '../services/sync/meteredTurn';
-import { connectProvider, getPeerCount } from '../services/sync/provider';
+import { connectProvider, getPeerCount, type SignalingStatus } from '../services/sync/provider';
 import {
   createSnapshotMirror,
   exportSnapshot,
@@ -52,6 +53,9 @@ export const useDaylistStore = defineStore('daylist', () => {
   const historyDays = ref<HistoryDay[]>([]);
   const usingTurn = ref(false);
   const signaling = ref<string[]>(DEFAULT_SIGNALING);
+  const signalingStatus = reactive<Record<string, SignalingStatus>>({});
+  const webrtcPeers = ref<string[]>([]);
+  const bcPeers = ref<string[]>([]);
 
   const ydocHandles = shallowRef<YDocHandles | null>(null);
   const provider = shallowRef<WebrtcProvider | null>(null);
@@ -59,10 +63,38 @@ export const useDaylistStore = defineStore('daylist', () => {
   const logger = shallowRef<DebugLogger | null>(null);
   const initialized = ref(false);
 
+  const logEntries = ref<
+    Array<{
+      id: string;
+      ts: number;
+      level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
+      event: string;
+      data: unknown;
+    }>
+  >([]);
+  let logCounter = 0;
+
+  const pushLog = (event: string, data: unknown = null, level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' = 'INFO') => {
+    const entry = {
+      id: `${Date.now()}-${logCounter++}`,
+      ts: Date.now(),
+      level,
+      event,
+      data: toJsonSafe(data)
+    };
+    logEntries.value = [...logEntries.value.slice(-299), entry];
+  };
+
+  const logEvent = (event: string, data: unknown = null, level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' = 'INFO') => {
+    pushLog(event, data, level);
+    logger.value?.log(event, data, level);
+  };
+
   const { show: toast } = useToastBus();
 
   const dayKey = computed(() => logicalDayKey(nowTs.value));
   const dayLabel = computed(() => `Day: ${dayKey.value} (resets ${pad2(BOUNDARY_HOUR)}:00 local)`);
+  const snapshotActive = computed(() => !!snapshotMirror.value);
 
   const ensureTask = (id: string) => {
     const ytask = ydocHandles.value?.yTasks.get(id);
@@ -196,7 +228,7 @@ export const useDaylistStore = defineStore('daylist', () => {
 
   const updateSyncBadge = () => {
     peerCount.value = getPeerCount(provider.value);
-    providerConnected.value = !!provider.value;
+    providerConnected.value = provider.value?.connected ?? false;
   };
 
   const connectSync = async () => {
@@ -227,7 +259,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       fetchFn: fetch,
       storage: localStorage,
       now: () => Date.now(),
-      log: logger.value?.log
+      log: logEvent
     });
 
     const hasTurn = iceServers.some((server) => {
@@ -254,7 +286,15 @@ export const useDaylistStore = defineStore('daylist', () => {
       onAwarenessChange: () => {
         updateSyncBadge();
         rebuildDerivedState();
-      }
+      },
+      onSignalingStatus: (status) => {
+        signalingStatus[status.url] = status;
+      },
+      onPeers: (peers) => {
+        webrtcPeers.value = peers.webrtcPeers;
+        bcPeers.value = peers.bcPeers;
+      },
+      onLog: logEvent
     });
 
     updateSyncBadge();
@@ -366,13 +406,57 @@ export const useDaylistStore = defineStore('daylist', () => {
   const exportJson = () => {
     if (!ydocHandles.value) return '';
     const snapshot = exportSnapshot(ydocHandles.value, { historyDays: 999999 });
-    return JSON.stringify(snapshot, null, 2);
+    const backup: SnapshotV2 = {
+      ...snapshot,
+      v: 2,
+      keys: {
+        room: keys.room,
+        enc: keys.enc,
+        sig: keys.sig,
+        turnKey: keys.turnKey
+      }
+    };
+    return JSON.stringify(backup, null, 2);
   };
 
-  const importJson = (snapshot: SnapshotV1) => {
+  const importJson = async (snapshot: SnapshotV1 | SnapshotV2) => {
     if (!ydocHandles.value) return;
-    importSnapshot(ydocHandles.value, snapshot);
+    if (snapshot && snapshot.v === 2 && (snapshot as SnapshotV2).keys) {
+      const nextKeys = (snapshot as SnapshotV2).keys as SnapshotKeys;
+      keys.room = nextKeys.room || keys.room;
+      keys.enc = nextKeys.enc || keys.enc;
+      keys.sig = nextKeys.sig || keys.sig;
+      keys.turnKey = nextKeys.turnKey || keys.turnKey;
+      persistKeysToStorage(localStorage, {
+        room: keys.room,
+        enc: keys.enc,
+        sig: keys.sig,
+        turnKey: keys.turnKey
+      });
+      writeKeysToUrl({
+        room: keys.room,
+        enc: keys.enc,
+        sig: keys.sig,
+        turnKey: keys.turnKey
+      });
+    }
+
+    const baseSnapshot: SnapshotV1 =
+      snapshot && snapshot.v === 2
+        ? {
+            v: 1,
+            exportedAt: snapshot.exportedAt,
+            tasks: snapshot.tasks,
+            templates: snapshot.templates,
+            history: snapshot.history
+          }
+        : (snapshot as SnapshotV1);
+
+    importSnapshot(ydocHandles.value, baseSnapshot);
     snapshotMirror.value?.flush('importSnapshot', true);
+    if (snapshot && snapshot.v === 2 && (snapshot as SnapshotV2).keys) {
+      await connectSync();
+    }
   };
 
   const wipeLocal = async () => {
@@ -440,18 +524,18 @@ export const useDaylistStore = defineStore('daylist', () => {
     logger.value = log;
     bindDebugWindow(log);
 
-    log.log('boot:env', {
+    logEvent('boot:env', {
       href: location.href,
       origin: location.origin,
       secureContext: !!window.isSecureContext,
       ua: navigator.userAgent
     });
 
-    const doc = createYDoc(log.log);
+    const doc = createYDoc(logEvent);
     ydocHandles.value = doc;
 
     if (doc.persistence) {
-      log.log('idb:waiting_for_synced');
+      logEvent('idb:waiting_for_synced');
       await new Promise((resolve) => {
         if (doc.idbSynced.value) return resolve(true);
         const handler = () => {
@@ -466,23 +550,23 @@ export const useDaylistStore = defineStore('daylist', () => {
       });
 
       idbReady.value = true;
-      log.log('idb:ready', { at: doc.idbSyncedAt.value, counts: { tasks: doc.yTasks.size } });
+      logEvent('idb:ready', { at: doc.idbSyncedAt.value, counts: { tasks: doc.yTasks.size } });
 
       try {
         const prev = await doc.persistence.get?.('meta:lastRunAt');
-        log.log('idb:meta_read', { prev });
+        logEvent('idb:meta_read', { prev });
         await doc.persistence.set?.('meta:lastRunAt', Date.now());
-        log.log('idb:meta_write_ok');
+        logEvent('idb:meta_write_ok');
       } catch (e) {
-        log.log('idb:meta_write_failed', { error: errToObj(e) }, 'WARN');
+        logEvent('idb:meta_write_failed', { error: errToObj(e) }, 'WARN');
       }
     } else {
-      log.log('idb:disabled_using_snapshot_only', null, 'WARN');
+      logEvent('idb:disabled_using_snapshot_only', null, 'WARN');
     }
 
     const snapshot = loadSnapshotFromStorage(localStorage);
     if (snapshot) {
-      log.log('snapshot:boot_found', {
+      logEvent('snapshot:boot_found', {
         bytes: JSON.stringify(snapshot).length,
         exportedAt: snapshot.exportedAt,
         v: snapshot.v,
@@ -493,9 +577,9 @@ export const useDaylistStore = defineStore('daylist', () => {
         }
       });
       importSnapshot(doc, snapshot);
-      log.log('snapshot:boot_imported');
+      logEvent('snapshot:boot_imported');
     } else {
-      log.log('snapshot:boot_none');
+      logEvent('snapshot:boot_none');
     }
 
     snapshotMirror.value = createSnapshotMirror({
@@ -505,7 +589,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       debounceMs: 250,
       flushIntervalMs: 10_000,
       onToast: toast,
-      onLog: log.log
+      onLog: logEvent
     });
 
     doc.ydoc.on('update', (update, origin) => {
@@ -518,7 +602,7 @@ export const useDaylistStore = defineStore('daylist', () => {
             ? origin
             : origin.constructor?.name || typeof origin;
 
-      log.log('ydoc:update', {
+      logEvent('ydoc:update', {
         updateBytes: update?.length ?? null,
         origin: originName,
         counts: { tasks: doc.yTasks.size, templates: doc.yTemplates.size, historyDays: doc.yHistory.size }
@@ -528,7 +612,6 @@ export const useDaylistStore = defineStore('daylist', () => {
     });
 
     doc.ydoc.on('afterTransaction', (tr) => {
-      if (!log.enabled) return;
 
       const originName =
         tr?.origin == null
@@ -551,7 +634,7 @@ export const useDaylistStore = defineStore('daylist', () => {
         // ignore
       }
 
-      log.log('ydoc:afterTransaction', {
+      logEvent('ydoc:afterTransaction', {
         local: !!tr.local,
         origin: originName,
         changed
@@ -584,14 +667,14 @@ export const useDaylistStore = defineStore('daylist', () => {
     try {
       if (navigator.storage?.estimate) {
         const est = await navigator.storage.estimate();
-        log.log('storage:estimate', { usage: est.usage, quota: est.quota });
+        logEvent('storage:estimate', { usage: est.usage, quota: est.quota });
       }
       if (navigator.storage?.persisted) {
         const persisted = await navigator.storage.persisted();
-        log.log('storage:persisted', { persisted });
+        logEvent('storage:persisted', { persisted });
       }
     } catch (e) {
-      log.log('storage:estimate_failed', { error: errToObj(e) }, 'WARN');
+      logEvent('storage:estimate_failed', { error: errToObj(e) }, 'WARN');
     }
   };
 
@@ -618,8 +701,14 @@ export const useDaylistStore = defineStore('daylist', () => {
     historyDays,
     usingTurn,
     signaling,
+    signalingStatus,
+    webrtcPeers,
+    bcPeers,
+    logEntries,
     dayKey,
     dayLabel,
+    snapshotActive,
+    initialized,
     initApp,
     connectSync,
     addTask,
@@ -633,6 +722,9 @@ export const useDaylistStore = defineStore('daylist', () => {
     buildSuggestions,
     parseDueInput,
     formatDueInput,
-    buildDefaultDue
+    buildDefaultDue,
+    clearDiagnosticsLog: () => {
+      logEntries.value = [];
+    }
   };
 });

@@ -1,17 +1,19 @@
 <template>
-  <div id="todayList" class="main-list">
+  <div class="main-list">
     <div v-if="tasks.length === 0" class="empty">No tasks yet. Tap + to add one.</div>
-    <TaskRow
-      v-for="task in tasks"
-      :key="task.id"
-      :task="task"
-      :day-key="sections.dayKey"
-      @toggle="store.toggleCompletion"
-      @archive="store.archiveTask"
-      @activate="(id) => store.setTaskActive(id, true)"
-      @deactivate="(id) => store.setTaskActive(id, false)"
-      @rename="store.renameTask"
-    />
+    <transition-group id="todayList" name="task-slide" tag="div" class="task-list">
+      <TaskRow
+        v-for="task in tasks"
+        :key="task.id"
+        :task="task"
+        :day-key="sections.dayKey"
+        @toggle="store.toggleCompletion"
+        @archive="store.archiveTask"
+        @activate="(id) => store.setTaskActive(id, true)"
+        @deactivate="(id) => store.setTaskActive(id, false)"
+        @rename="store.renameTask"
+      />
+    </transition-group>
   </div>
 </template>
 

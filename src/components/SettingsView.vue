@@ -1,5 +1,9 @@
 <template>
   <div>
+    <div class="settings-header">
+      <div class="section-title">Settings</div>
+      <button class="chip primary" type="button" @click="$emit('openDiagnostics')">Diagnostics</button>
+    </div>
     <section class="settings-block">
       <div class="section-title">Upcoming</div>
       <div id="upcomingList">
@@ -41,6 +45,8 @@ import { useDaylistStore } from '../stores/daylist';
 import TaskRow from './TaskRow.vue';
 import HistoryPanel from './HistoryPanel.vue';
 import SyncBackupPanel from './SyncBackupPanel.vue';
+
+defineEmits<{ openDiagnostics: [] }>();
 
 const store = useDaylistStore();
 const sections = computed(() => buildTodaySections(store.tasks, store.nowTs));

@@ -1,5 +1,11 @@
 <template>
-  <div class="task-wrap" :class="{ swiped: swiped }" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
+  <div
+    class="task-wrap"
+    :class="{ swiped: swiped, 'show-actions': showActions }"
+    @touchstart="onTouchStart"
+    @touchmove="onTouchMove"
+    @touchend="onTouchEnd"
+  >
     <div class="task-actions">
       <button
         v-if="task.type === 'daily'"
@@ -64,6 +70,7 @@ const dueLabel = computed(() => (props.task.dueAt ? formatDateTime(props.task.du
 const startX = ref(0);
 const offsetX = ref(0);
 const swiped = ref(false);
+const showActions = computed(() => swiped.value || offsetX.value < -10);
 const maxSwipe = -140;
 
 const onToggle = (event: Event) => {
