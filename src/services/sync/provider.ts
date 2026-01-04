@@ -26,14 +26,17 @@ export async function connectProvider(opts: {
   onPeers?: (peers: { webrtcPeers: string[]; bcPeers: string[] }) => void;
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
 }): Promise<WebrtcProvider> {
-  const SIGNAL_THROTTLE_DELAY_MS = 1000;
-  const SIGNAL_THROTTLE_INTERVAL_MS = 5000;
+  const SIGNAL_BASE_INTERVAL_MS = 300;
+  const SIGNAL_THROTTLE_DELAY_MS = 5000;
+  const SIGNAL_THROTTLE_INTERVAL_MS = 1000;
 
   const sendQueue: Array<() => void> = [];
   let sendTimer: ReturnType<typeof setTimeout> | null = null;
   let throttleActive = false;
   let throttleTimer: ReturnType<typeof setTimeout> | null = null;
   let hasPeer = false;
+
+  const currentInterval = () => (throttleActive ? SIGNAL_THROTTLE_INTERVAL_MS : SIGNAL_BASE_INTERVAL_MS);
 
   const scheduleSend = (fn: () => void) => {
     sendQueue.push(fn);
@@ -45,7 +48,7 @@ export async function connectProvider(opts: {
       }
       const next = sendQueue.shift();
       if (next) next();
-      sendTimer = setTimeout(pump, SIGNAL_THROTTLE_INTERVAL_MS);
+      sendTimer = setTimeout(pump, currentInterval());
     };
     pump();
   };
@@ -80,6 +83,11 @@ export async function connectProvider(opts: {
           delayMs: SIGNAL_THROTTLE_DELAY_MS,
           reason
         });
+        if (sendTimer != null) {
+          clearTimeout(sendTimer);
+          sendTimer = null;
+          if (sendQueue.length) scheduleSend(() => {});
+        }
       }
     }, SIGNAL_THROTTLE_DELAY_MS);
   };
@@ -92,6 +100,11 @@ export async function connectProvider(opts: {
     if (throttleActive) {
       throttleActive = false;
       opts.onLog?.('signal:throttle_off');
+      if (sendTimer != null) {
+        clearTimeout(sendTimer);
+        sendTimer = null;
+        if (sendQueue.length) scheduleSend(() => {});
+      }
     }
     if (flush) flushSendQueue();
     else clearSendQueue();
@@ -179,14 +192,15 @@ export async function connectProvider(opts: {
     const originalSend = conn.send.bind(conn);
     conn.send = (message: unknown) => {
       const doSend = () => {
-        opts.onLog?.('signal:send', { url: conn.url, message, throttled: throttleActive });
+        opts.onLog?.('signal:send', {
+          url: conn.url,
+          message,
+          throttled: throttleActive,
+          intervalMs: currentInterval()
+        });
         originalSend(message);
       };
-      if (throttleActive) {
-        scheduleSend(doSend);
-      } else {
-        doSend();
-      }
+      scheduleSend(doSend);
     };
   };
 
