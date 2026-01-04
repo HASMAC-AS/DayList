@@ -167,8 +167,9 @@ export async function connectProvider(opts: {
 
   const shouldBypassThrottle = (message: unknown) => {
     if (!message || typeof message !== 'object') return false;
-    const msg = message as { type?: string; data?: unknown };
+    const msg = message as { type?: string; data?: unknown; topic?: string };
     if (msg.type !== 'publish') return false;
+    if (msg.topic !== opts.room) return false;
     if (msg.data && typeof msg.data === 'object') {
       return (msg.data as { type?: string }).type === 'signal';
     }
@@ -221,8 +222,9 @@ export async function connectProvider(opts: {
 
   const logDecrypted = (direction: 'send' | 'recv', url: string, message: unknown, conn?: SignalingConn) => {
     if (!message || typeof message !== 'object') return;
-    const msg = message as { type?: string; data?: unknown; from?: string; to?: string };
+    const msg = message as { type?: string; data?: unknown; from?: string; to?: string; topic?: string };
     if (msg.type !== 'publish' || typeof msg.data !== 'string') return;
+    if (msg.topic !== opts.room) return;
     decryptSignalPayload(msg.data)
       .then((decrypted) => {
         if (decrypted == null) return;
@@ -242,7 +244,7 @@ export async function connectProvider(opts: {
       .catch((error) => {
         opts.onLog?.(
           `signal:${direction}_decrypt_failed`,
-          { url, error: errToObj(error) },
+          { url, topic: msg.topic, error: errToObj(error) },
           'WARN'
         );
       });
@@ -491,15 +493,22 @@ export async function connectProvider(opts: {
       opts.onLog?.('signal:recv', { url: conn.url, message: sanitizeSignalMessage(message) });
       logDecrypted('recv', conn.url, message, conn);
       if (message && typeof message === 'object') {
-        const msg = message as { type?: string; from?: string; peers?: unknown };
-        if (typeof msg.from === 'string' && msg.from) {
-          markPeerSeen('signal:from', { type: msg.type });
-          notePeerSeen(msg.from, conn, 'signal:from', { type: msg.type });
+        const msg = message as {
+          type?: string;
+          from?: string;
+          peers?: unknown;
+          topic?: string;
+          topics?: unknown;
+        };
+        const hasTopic =
+          msg.type === 'publish' ? msg.topic === opts.room
+          : Array.isArray(msg.topics) ? msg.topics.includes(opts.room)
+          : false;
+        if (typeof msg.from === 'string' && msg.from && hasTopic) {
+          markPeerSeen(`signal:${msg.type || 'from'}`, { type: msg.type });
+          notePeerSeen(msg.from, conn, `signal:${msg.type || 'from'}`, { type: msg.type });
         } else if (msg.type === 'welcome' && Array.isArray(msg.peers) && msg.peers.length > 0) {
-          markPeerSeen('signal:welcome', { count: msg.peers.length });
-          msg.peers.forEach((peerId) => {
-            if (typeof peerId === 'string') notePeerSeen(peerId, conn, 'signal:welcome');
-          });
+          opts.onLog?.('signal:welcome_peers', { count: msg.peers.length });
         }
       }
     });

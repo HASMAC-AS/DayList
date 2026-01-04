@@ -110,7 +110,7 @@ describe('signaling throttling', () => {
     const provider = await buildProvider();
     const conn = provider.signalingConns[0];
 
-    conn.emit('message', [{ type: 'subscribe', from: 'peer-a' }]);
+    conn.emit('message', [{ type: 'subscribe', from: 'peer-a', topics: ['room'] }]);
 
     conn.send({ n: 1 });
     conn.send({ n: 2 });
@@ -132,7 +132,7 @@ describe('signaling throttling', () => {
     const conn = provider.signalingConns[0];
 
     vi.setSystemTime(5 * 60 * 1000 + 1);
-    conn.emit('message', [{ type: 'subscribe', from: 'peer-a' }]);
+    conn.emit('message', [{ type: 'subscribe', from: 'peer-a', topics: ['room'] }]);
 
     conn.send({ n: 1 });
     conn.send({ n: 2 });
