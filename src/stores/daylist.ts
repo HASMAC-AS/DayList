@@ -551,6 +551,20 @@ export const useDaylistStore = defineStore('daylist', () => {
     if (!ydocHandles.value) return;
 
     try {
+      if (provider.value) {
+        try {
+          provider.value.destroy();
+        } catch {
+          // ignore
+        }
+        provider.value = null;
+      }
+
+      if (snapshotMirror.value) {
+        snapshotMirror.value.dispose();
+        snapshotMirror.value = null;
+      }
+
       localStorage.removeItem('daylist.snapshot.v1');
       localStorage.removeItem('daylist.meteredIceCache.v1');
 
@@ -558,13 +572,14 @@ export const useDaylistStore = defineStore('daylist', () => {
         await ydocHandles.value.persistence.clearData();
       }
 
-      ydocHandles.value.ydoc.transact(() => {
-        ydocHandles.value?.yTasks.clear();
-        ydocHandles.value?.yTemplates.clear();
-        ydocHandles.value?.yHistory.clear();
-      });
+      try {
+        ydocHandles.value.ydoc.destroy();
+      } catch {
+        // ignore
+      }
 
-      toast('Wiped');
+      toast('Local data cleared. Reloading...');
+      window.location.reload();
     } catch (e) {
       logger.value?.log('wipe:failed', { error: errToObj(e) }, 'ERROR');
       toast('Wipe failed');
