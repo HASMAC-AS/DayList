@@ -1,5 +1,4 @@
-import { SignalingConn, WebrtcProvider } from 'y-webrtc';
-import { WebrtcConn } from 'y-webrtc';
+import { SignalingConn, WebrtcConn, WebrtcProvider } from 'y-webrtc';
 import * as decoding from 'lib0/decoding';
 import { errToObj } from '../../lib/core';
 import type { YDocHandles } from './ydoc';
@@ -30,28 +29,34 @@ export async function connectProvider(opts: {
   onPeers?: (peers: { webrtcPeers: string[]; bcPeers: string[] }) => void;
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
 }): Promise<WebrtcProvider> {
-  const SIGNAL_BASE_INTERVAL_MS = 2500;
-  const SIGNAL_THROTTLE_DELAY_MS = 10000;
-  const SIGNAL_THROTTLE_INTERVAL_MS = 10000;
+  const STARTUP_BURST_COUNT = 3;
+  const STARTUP_BURST_INTERVAL_MS = 100;
+  const PRE_PEER_INTERVAL_MS = 1000;
+  const POST_PEER_INTERVAL_MS = 30_000;
+  const PEER_STALE_MS = 30_000;
+  const PEER_URGENT_MS = 5 * 60 * 1000;
+  const URGENT_BURST_COUNT = 3;
 
   const sendQueue: Array<() => void> = [];
   let sendTimer: ReturnType<typeof setTimeout> | null = null;
-  let throttleActive = false;
-  let throttleTimer: ReturnType<typeof setTimeout> | null = null;
-  let hasPeer = false;
+  let burstRemaining = 0;
+  let startupBurstUsed = false;
+  let peerConnected = false;
+  let priorityRemaining = 0;
   let peerSeen = false;
   let peerSeenAt = 0;
   const peerLastSeen = new Map<string, number>();
   const pendingPeers = new Set<string>();
   let staleInterval: ReturnType<typeof setInterval> | null = null;
 
-  const PEER_STALE_MS = 30_000;
   const STALE_CHECK_INTERVAL_MS = 5_000;
 
-  const currentInterval = () => (throttleActive ? SIGNAL_THROTTLE_INTERVAL_MS : SIGNAL_BASE_INTERVAL_MS);
+  const currentInterval = () => {
+    if (burstRemaining > 0) return STARTUP_BURST_INTERVAL_MS;
+    return peerConnected ? POST_PEER_INTERVAL_MS : PRE_PEER_INTERVAL_MS;
+  };
 
-  const scheduleSend = (fn: () => void) => {
-    sendQueue.push(fn);
+  const startPump = () => {
     if (sendTimer != null) return;
     const pump = () => {
       if (sendQueue.length === 0) {
@@ -60,68 +65,38 @@ export async function connectProvider(opts: {
       }
       const next = sendQueue.shift();
       if (next) next();
+      if (burstRemaining > 0) burstRemaining -= 1;
       sendTimer = setTimeout(pump, currentInterval());
     };
     pump();
   };
 
-  const flushSendQueue = () => {
+  const scheduleSend = (fn: () => void) => {
+    if (priorityRemaining > 0) {
+      priorityRemaining -= 1;
+      fn();
+      return;
+    }
+    sendQueue.push(fn);
+    startPump();
+  };
+
+  const resetSendTimer = () => {
     if (sendTimer != null) {
       clearTimeout(sendTimer);
       sendTimer = null;
     }
-    while (sendQueue.length) {
+    startPump();
+  };
+
+  const grantPriorityBurst = (reason: string) => {
+    priorityRemaining = Math.max(priorityRemaining, URGENT_BURST_COUNT);
+    opts.onLog?.('signal:priority_burst', { reason, remaining: priorityRemaining });
+    while (priorityRemaining > 0 && sendQueue.length > 0) {
       const next = sendQueue.shift();
       if (next) next();
+      priorityRemaining -= 1;
     }
-  };
-
-  const clearSendQueue = () => {
-    if (sendTimer != null) {
-      clearTimeout(sendTimer);
-      sendTimer = null;
-    }
-    sendQueue.length = 0;
-  };
-
-  const startThrottleTimer = (reason = 'start') => {
-    if (peerSeen) return;
-    if (throttleTimer != null) clearTimeout(throttleTimer);
-    throttleTimer = setTimeout(() => {
-      if (hasPeer || peerSeen) return;
-      if (!throttleActive) {
-        throttleActive = true;
-        opts.onLog?.('signal:throttle_on', {
-          intervalMs: SIGNAL_THROTTLE_INTERVAL_MS,
-          delayMs: SIGNAL_THROTTLE_DELAY_MS,
-          reason,
-          peerSeen
-        });
-        if (sendTimer != null) {
-          clearTimeout(sendTimer);
-          sendTimer = null;
-          if (sendQueue.length) scheduleSend(() => {});
-        }
-      }
-    }, SIGNAL_THROTTLE_DELAY_MS);
-  };
-
-  const stopThrottle = (flush = true) => {
-    if (throttleTimer != null) {
-      clearTimeout(throttleTimer);
-      throttleTimer = null;
-    }
-    if (throttleActive) {
-      throttleActive = false;
-      opts.onLog?.('signal:throttle_off');
-      if (sendTimer != null) {
-        clearTimeout(sendTimer);
-        sendTimer = null;
-        if (sendQueue.length) scheduleSend(() => {});
-      }
-    }
-    if (flush) flushSendQueue();
-    else clearSendQueue();
   };
 
   const provider = new WebrtcProvider(opts.room, opts.doc.ydoc, {
@@ -200,10 +175,14 @@ export async function connectProvider(opts: {
     const now = Date.now();
     const last = peerLastSeen.get(peerId);
     const stale = last != null && now - last > PEER_STALE_MS;
+    const urgent = last == null || now - (last || 0) > PEER_URGENT_MS;
     const isNew = last == null;
     peerLastSeen.set(peerId, now);
 
     if (isNew || stale) {
+      if (urgent) {
+        grantPriorityBurst(isNew ? 'new_peer' : 'stale_peer');
+      }
       ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
     }
   };
@@ -253,16 +232,18 @@ export async function connectProvider(opts: {
   const updateHasPeer = (reason: string) => {
     const nowHasPeer = computeHasPeer();
     if (nowHasPeer) {
-      if (!hasPeer) {
-        hasPeer = true;
-        stopThrottle();
+      if (!peerConnected) {
+        peerConnected = true;
+        opts.onLog?.('signal:peer_connected', { reason, intervalMs: currentInterval() });
+        resetSendTimer();
         opts.onLog?.('signal:peer_detected', { reason });
       }
       return;
     }
-    if (hasPeer) {
-      hasPeer = false;
-      startThrottleTimer(reason);
+    if (peerConnected) {
+      peerConnected = false;
+      opts.onLog?.('signal:peer_lost', { reason, intervalMs: currentInterval() });
+      resetSendTimer();
     }
   };
 
@@ -270,13 +251,11 @@ export async function connectProvider(opts: {
     if (peerSeen) return;
     peerSeen = true;
     peerSeenAt = Date.now();
-    stopThrottle();
     opts.onLog?.('signal:peer_seen', { reason, detail, at: peerSeenAt });
   };
 
   const originalDestroy = provider.destroy.bind(provider);
   provider.destroy = () => {
-    stopThrottle(false);
     if (staleInterval) {
       clearInterval(staleInterval);
       staleInterval = null;
@@ -284,7 +263,10 @@ export async function connectProvider(opts: {
     return originalDestroy();
   };
 
-  startThrottleTimer('init');
+  opts.onLog?.('signal:throttle_mode', {
+    phase: 'init',
+    intervalMs: currentInterval()
+  });
 
   staleInterval = setInterval(() => {
     const now = Date.now();
@@ -343,6 +325,15 @@ export async function connectProvider(opts: {
     conn.on('connect', () => {
       updateStatus();
       opts.onLog?.('signal:connect', { url: conn.url });
+      if (!startupBurstUsed) {
+        startupBurstUsed = true;
+        burstRemaining = STARTUP_BURST_COUNT;
+        opts.onLog?.('signal:startup_burst', {
+          count: STARTUP_BURST_COUNT,
+          intervalMs: STARTUP_BURST_INTERVAL_MS
+        });
+        resetSendTimer();
+      }
       flushPendingPeers('signaling_connect');
     });
     conn.on('disconnect', () => {
@@ -373,7 +364,6 @@ export async function connectProvider(opts: {
         opts.onLog?.('signal:send', {
           url: conn.url,
           message: sanitizeSignalMessage(message),
-          throttled: throttleActive,
           intervalMs: currentInterval()
         });
         logDecrypted('send', conn.url, message);

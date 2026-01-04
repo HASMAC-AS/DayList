@@ -42,7 +42,7 @@ vi.mock('y-webrtc', () => {
   class WebrtcProvider extends Emitter {
     constructor(room, doc, opts) {
       super();
-      this.room = room;
+      this.room = { peerId: 'local', webrtcConns: new Map(), key: null };
       this.doc = doc;
       this.signalingConns = (opts.signaling || []).map((url) => new SignalingConn(url));
       this.awareness = new Awareness();
@@ -50,7 +50,11 @@ vi.mock('y-webrtc', () => {
     destroy() {}
   }
 
-  return { WebrtcProvider, SignalingConn };
+  class WebrtcConn {
+    constructor() {}
+  }
+
+  return { WebrtcProvider, SignalingConn, WebrtcConn };
 });
 
 const buildProvider = async () => {
@@ -70,52 +74,76 @@ afterEach(() => {
 });
 
 describe('signaling throttling', () => {
-  it('limits signaling sends to 1 per 100ms', async () => {
+  it('sends a 3-message startup burst at 100ms spacing, then 1 per 1000ms', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
     const provider = await buildProvider();
     const conn = provider.signalingConns[0];
 
+    conn.emit('connect');
+
     conn.send({ n: 1 });
     conn.send({ n: 2 });
     conn.send({ n: 3 });
+    conn.send({ n: 4 });
 
     expect(conn.sendCalls.length).toBe(1);
 
-    await vi.advanceTimersByTimeAsync(99);
-    expect(conn.sendCalls.length).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(100);
     expect(conn.sendCalls.length).toBe(2);
 
     await vi.advanceTimersByTimeAsync(100);
     expect(conn.sendCalls.length).toBe(3);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(conn.sendCalls.length).toBe(3);
+
+    await vi.advanceTimersByTimeAsync(900);
+    expect(conn.sendCalls.length).toBe(3);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(conn.sendCalls.length).toBe(4);
   });
 
-  it('slows signaling to 1 per 5000ms after 1000ms without peers', async () => {
+  it('throttles to 1 per 30s after a peer is connected', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
     const provider = await buildProvider();
     const conn = provider.signalingConns[0];
 
+    provider.awareness.states.set('remote', {});
+    provider.awareness.emit('change');
+
     conn.send({ n: 1 });
     conn.send({ n: 2 });
 
-    await vi.advanceTimersByTimeAsync(1000);
-    const before = conn.sendCalls.length;
+    expect(conn.sendCalls.length).toBe(1);
 
-    conn.send({ n: 3 });
-    conn.send({ n: 4 });
-    conn.send({ n: 5 });
-
-    expect(conn.sendCalls.length).toBe(before + 1);
-
-    await vi.advanceTimersByTimeAsync(4999);
-    expect(conn.sendCalls.length).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(conn.sendCalls.length).toBe(1);
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(conn.sendCalls.length).toBe(before + 2);
+    expect(conn.sendCalls.length).toBe(2);
+  });
+
+  it('sends immediately when a new peer appears after 5 minutes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const provider = await buildProvider();
+    const conn = provider.signalingConns[0];
+
+    provider.awareness.states.set('remote', {});
+    provider.awareness.emit('change');
+
+    vi.setSystemTime(5 * 60 * 1000 + 1);
+    conn.emit('message', [{ type: 'subscribe', from: 'peer-a' }]);
+
+    conn.send({ n: 1 });
+    conn.send({ n: 2 });
+
+    expect(conn.sendCalls.length).toBe(2);
   });
 });
