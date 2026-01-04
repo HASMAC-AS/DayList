@@ -27,6 +27,10 @@
           <div class="diag-label">History days</div>
           <div class="diag-value">{{ store.historyDays.length }}</div>
         </div>
+        <div class="diag-item">
+          <div class="diag-label">Build</div>
+          <div class="diag-value mono">{{ buildId }}</div>
+        </div>
       </div>
     </div>
 
@@ -106,10 +110,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { redact } from '../lib/core';
+import { BUILD_ID } from '../lib/build';
 import { useDaylistStore } from '../stores/daylist';
 
 const store = useDaylistStore();
 const logEl = ref<HTMLElement | null>(null);
+const buildId = BUILD_ID;
 
 const redactedEnc = computed(() => redact(store.keys.enc || '', 4) || '-');
 const signalingRows = computed(() => {

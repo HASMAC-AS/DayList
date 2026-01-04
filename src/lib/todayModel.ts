@@ -31,12 +31,7 @@ export function buildTodaySections(tasks: Task[], now: number = Date.now()): Tod
     }
   }
 
-  daily.sort((a, b) => {
-    const ca = isCompletedForDay(a, dayKey) ? 1 : 0;
-    const cb = isCompletedForDay(b, dayKey) ? 1 : 0;
-    if (ca !== cb) return ca - cb;
-    return a.title.localeCompare(b.title);
-  });
+  daily.sort((a, b) => a.title.localeCompare(b.title));
   scheduledDue.sort((a, b) => (a.dueAt || 0) - (b.dueAt || 0));
   scheduledUpcoming.sort((a, b) => (a.dueAt || 0) - (b.dueAt || 0));
 

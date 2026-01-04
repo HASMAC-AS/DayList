@@ -1,9 +1,5 @@
 <template>
   <div>
-    <div class="settings-header">
-      <div class="section-title">Settings</div>
-      <button class="chip primary" type="button" @click="$emit('openDiagnostics')">Diagnostics</button>
-    </div>
     <section class="settings-block">
       <div class="section-title">Upcoming</div>
       <div id="upcomingList">
@@ -35,6 +31,11 @@
     <section class="settings-block">
       <SyncBackupPanel />
     </section>
+
+    <section class="settings-block settings-actions-bottom">
+      <button class="chip ghost" type="button" @click="reloadApp">Reload</button>
+      <button class="chip primary" type="button" @click="$emit('openDiagnostics')">Diagnostics</button>
+    </section>
   </div>
 </template>
 
@@ -50,4 +51,8 @@ defineEmits<{ openDiagnostics: [] }>();
 
 const store = useDaylistStore();
 const sections = computed(() => buildTodaySections(store.tasks, store.nowTs));
+
+const reloadApp = () => {
+  window.location.reload();
+};
 </script>

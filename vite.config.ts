@@ -4,6 +4,11 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
   base: './',
+  define: {
+    __BUILD_ID__: JSON.stringify(
+      process.env.GITHUB_RUN_NUMBER || process.env.BUILD_NUMBER || `${Date.now()}`
+    )
+  },
   plugins: [
     vue(),
     VitePWA({
