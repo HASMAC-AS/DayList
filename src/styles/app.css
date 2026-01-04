@@ -209,6 +209,12 @@ h1 {
   flex-wrap: wrap;
 }
 
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .main-view {
   min-height: 50vh;
   padding-bottom: 80px;
@@ -219,6 +225,12 @@ h1 {
   flex-direction: column;
   gap: 18px;
   padding-bottom: 80px;
+}
+
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 
 .settings-header {
@@ -434,7 +446,25 @@ input[type='datetime-local'] {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-soft-2);
+  color: var(--text);
+  outline: none;
+  resize: vertical;
+  min-height: 96px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
 input:focus {
+  border-color: rgba(37, 99, 235, 0.4);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+textarea:focus {
   border-color: rgba(37, 99, 235, 0.4);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
@@ -812,7 +842,11 @@ details .bd {
 .fab-left svg {
   width: 22px;
   height: 22px;
-  fill: var(--text);
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .composer-overlay {

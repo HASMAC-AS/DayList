@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="settings-stack">
     <section class="settings-block">
       <div class="section-title">Upcoming</div>
       <div id="upcomingList">
