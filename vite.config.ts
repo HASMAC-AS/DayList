@@ -7,7 +7,8 @@ export default defineConfig({
   define: {
     __BUILD_ID__: JSON.stringify(
       process.env.GITHUB_RUN_NUMBER || process.env.BUILD_NUMBER || `${Date.now()}`
-    )
+    ),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString())
   },
   plugins: [
     vue(),

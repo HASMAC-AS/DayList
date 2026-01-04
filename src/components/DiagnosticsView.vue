@@ -31,6 +31,10 @@
           <div class="diag-label">Build</div>
           <div class="diag-value mono">{{ buildId }}</div>
         </div>
+        <div class="diag-item">
+          <div class="diag-label">Build time</div>
+          <div class="diag-value mono">{{ buildTimeLabel }}</div>
+        </div>
       </div>
     </div>
 
@@ -110,12 +114,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { redact } from '../lib/core';
-import { BUILD_ID } from '../lib/build';
+import { BUILD_ID, BUILD_TIME } from '../lib/build';
 import { useDaylistStore } from '../stores/daylist';
 
 const store = useDaylistStore();
 const logEl = ref<HTMLElement | null>(null);
 const buildId = BUILD_ID;
+const buildTime = BUILD_TIME;
+
+const buildTimeLabel = computed(() => {
+  if (!buildTime) return '-';
+  const date = new Date(buildTime);
+  if (Number.isNaN(date.valueOf())) return buildTime;
+  return `${date.toLocaleString()} (${buildTime})`;
+});
 
 const redactedEnc = computed(() => redact(store.keys.enc || '', 4) || '-');
 const signalingRows = computed(() => {
