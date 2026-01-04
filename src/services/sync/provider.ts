@@ -165,6 +165,22 @@ export async function connectProvider(opts: {
     return message;
   };
 
+  const shouldBypassThrottle = (message: unknown) => {
+    if (!message || typeof message !== 'object') return false;
+    const msg = message as { type?: string; data?: unknown };
+    if (msg.type !== 'publish') return false;
+    if (msg.data && typeof msg.data === 'object') {
+      return (msg.data as { type?: string }).type === 'signal';
+    }
+    if (typeof msg.data !== 'string') return false;
+    return decryptSignalPayload(msg.data)
+      .then((decrypted) => {
+        if (!decrypted || typeof decrypted !== 'object') return false;
+        return (decrypted as { type?: string }).type === 'signal';
+      })
+      .catch(() => true);
+  };
+
   const ensureWebrtcConn = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
     const room = getRoom();
     if (!room) {
@@ -499,7 +515,20 @@ export async function connectProvider(opts: {
         logDecrypted('send', conn.url, message);
         originalSend(message);
       };
-      scheduleSend(doSend);
+      const bypass = shouldBypassThrottle(message);
+      if (typeof bypass === 'boolean') {
+        if (bypass) doSend();
+        else scheduleSend(doSend);
+        return;
+      }
+      bypass
+        .then((allowed) => {
+          if (allowed) doSend();
+          else scheduleSend(doSend);
+        })
+        .catch(() => {
+          doSend();
+        });
     };
   };
 
