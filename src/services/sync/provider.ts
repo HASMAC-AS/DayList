@@ -26,9 +26,9 @@ export async function connectProvider(opts: {
   onPeers?: (peers: { webrtcPeers: string[]; bcPeers: string[] }) => void;
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
 }): Promise<WebrtcProvider> {
-  const SIGNAL_BASE_INTERVAL_MS = 900;
-  const SIGNAL_THROTTLE_DELAY_MS = 1000;
-  const SIGNAL_THROTTLE_INTERVAL_MS = 5000;
+  const SIGNAL_BASE_INTERVAL_MS = 2500;
+  const SIGNAL_THROTTLE_DELAY_MS = 10000;
+  const SIGNAL_THROTTLE_INTERVAL_MS = 10000;
 
   const sendQueue: Array<() => void> = [];
   let sendTimer: ReturnType<typeof setTimeout> | null = null;
