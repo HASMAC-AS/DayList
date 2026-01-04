@@ -488,6 +488,9 @@ export async function connectProvider(opts: {
           topic?: string;
           topics?: unknown;
         };
+        if (msg.type === 'publish' && msg.topic && msg.topic !== opts.room) {
+          opts.onLog?.('signal:recv_other_room', { topic: msg.topic, room: opts.room }, 'DEBUG');
+        }
         const hasTopic =
           msg.type === 'publish' ? msg.topic === opts.room
           : Array.isArray(msg.topics) ? msg.topics.includes(opts.room)

@@ -63,6 +63,8 @@ export const useDaylistStore = defineStore('daylist', () => {
   const webrtcPeers = ref<string[]>([]);
   const bcPeers = ref<string[]>([]);
   const pendingTaskIds = ref<string[]>([]);
+  const lastLocalChangeAt = ref(0);
+  let lastKickAt = 0;
   const signalingPeerSeenAt = ref(0);
 
   const ydocHandles = shallowRef<YDocHandles | null>(null);
@@ -277,6 +279,26 @@ export const useDaylistStore = defineStore('daylist', () => {
   const hasSignalingConnection = () =>
     Object.values(signalingStatus).some((status) => status && status.connected);
 
+  const kickSignaling = (reason: string) => {
+    const now = Date.now();
+    if (now - lastKickAt < 4000) return;
+    lastKickAt = now;
+    if (!provider.value || !providerConnected.value) {
+      logEvent('sync:kick_fallback', { reason });
+      connectSync();
+      return;
+    }
+    if (peerCount.value > 0) return;
+    logEvent('sync:kick_signaling', { reason });
+    try {
+      provider.value.disconnect();
+      provider.value.connect();
+    } catch (error) {
+      logEvent('sync:kick_failed', { reason, error: errToObj(error) }, 'WARN');
+      connectSync();
+    }
+  };
+
   const resumeSync = (reason: string) => {
     if (!initialized.value) return;
     const now = Date.now();
@@ -289,6 +311,11 @@ export const useDaylistStore = defineStore('daylist', () => {
     resumeTimer = window.setTimeout(() => {
       const age = signalingLastMessageAt.value ? now - signalingLastMessageAt.value : Infinity;
       const signalOk = hasSignalingConnection();
+      if (peerCount.value === 0) {
+        kickSignaling(`resume:${reason}`);
+        return;
+      }
+
       if (providerConnected.value && signalOk && age < 15000) {
         logEvent('sync:resume_skip', { reason, ageMs: age, connected: providerConnected.value });
         return;
@@ -825,6 +852,10 @@ export const useDaylistStore = defineStore('daylist', () => {
             ? origin
             : origin.constructor?.name || typeof origin;
 
+      if (origin == null || typeof origin === 'string') {
+        lastLocalChangeAt.value = Date.now();
+      }
+
       logEvent('ydoc:update', {
         updateBytes: update?.length ?? null,
         origin: originName,
@@ -916,10 +947,13 @@ export const useDaylistStore = defineStore('daylist', () => {
       const lastSignal = signalingLastMessageAt.value || 0;
       const staleSignal = lastSignal > 0 && now - lastSignal > 25_000;
       const neverSignaled = lastSignal === 0 && initialized.value;
+      const recentLocalChange = lastLocalChangeAt.value > 0 && now - lastLocalChangeAt.value < 6000;
       if (staleSignal) {
         resumeSync('watchdog:stale_signal');
       } else if (!providerConnected.value && (staleSignal || neverSignaled)) {
         resumeSync('watchdog:disconnected');
+      } else if (peerCount.value === 0 && recentLocalChange) {
+        kickSignaling('watchdog:local_change');
       }
     }, 15_000);
 
