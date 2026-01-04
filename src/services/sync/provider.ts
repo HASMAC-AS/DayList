@@ -26,7 +26,7 @@ export async function connectProvider(opts: {
   onPeers?: (peers: { webrtcPeers: string[]; bcPeers: string[] }) => void;
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
 }): Promise<WebrtcProvider> {
-  const SIGNAL_THROTTLE_DELAY_MS = 5000;
+  const SIGNAL_THROTTLE_DELAY_MS = 1000;
   const SIGNAL_THROTTLE_INTERVAL_MS = 1000;
 
   const sendQueue: Array<() => void> = [];
@@ -69,13 +69,17 @@ export async function connectProvider(opts: {
     sendQueue.length = 0;
   };
 
-  const startThrottleTimer = () => {
+  const startThrottleTimer = (reason = 'start') => {
     if (throttleTimer != null) clearTimeout(throttleTimer);
     throttleTimer = setTimeout(() => {
       if (hasPeer) return;
       if (!throttleActive) {
         throttleActive = true;
-        opts.onLog?.('signal:throttle_on', { intervalMs: SIGNAL_THROTTLE_INTERVAL_MS });
+        opts.onLog?.('signal:throttle_on', {
+          intervalMs: SIGNAL_THROTTLE_INTERVAL_MS,
+          delayMs: SIGNAL_THROTTLE_DELAY_MS,
+          reason
+        });
       }
     }, SIGNAL_THROTTLE_DELAY_MS);
   };
@@ -101,15 +105,35 @@ export async function connectProvider(opts: {
     }
   });
 
+  const computeHasPeer = () => provider.awareness.getStates().size > 1;
+  const updateHasPeer = (reason: string) => {
+    const nowHasPeer = computeHasPeer();
+    if (nowHasPeer) {
+      if (!hasPeer) {
+        hasPeer = true;
+        stopThrottle();
+        opts.onLog?.('signal:peer_detected', { reason });
+      }
+      return;
+    }
+    if (hasPeer) {
+      hasPeer = false;
+      startThrottleTimer(reason);
+    }
+  };
+
   const originalDestroy = provider.destroy.bind(provider);
   provider.destroy = () => {
     stopThrottle(false);
     return originalDestroy();
   };
 
-  startThrottleTimer();
+  startThrottleTimer('init');
 
-  provider.awareness.on('change', opts.onAwarenessChange);
+  provider.awareness.on('change', (...args: unknown[]) => {
+    opts.onAwarenessChange();
+    updateHasPeer('awareness');
+  });
 
   provider.on('status', (event) => {
     opts.onLog?.('provider:status', event);
@@ -121,14 +145,6 @@ export async function connectProvider(opts: {
       bcPeers: event.bcPeers || []
     });
     opts.onLog?.('provider:peers', event);
-    const nowHasPeer = (event.webrtcPeers || []).length > 0 || (event.bcPeers || []).length > 0;
-    if (nowHasPeer) {
-      hasPeer = true;
-      stopThrottle();
-    } else if (hasPeer) {
-      hasPeer = false;
-      if (!throttleActive) startThrottleTimer();
-    }
   });
 
   const attachConn = (conn: SignalingConn) => {
@@ -179,6 +195,8 @@ export async function connectProvider(opts: {
       if (conn) attachConn(conn as SignalingConn);
     });
   }
+
+  updateHasPeer('init');
 
   return provider;
 }
