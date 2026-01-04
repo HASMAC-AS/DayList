@@ -1,13 +1,7 @@
 import { test, expect } from '@playwright/test';
-import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const appUrl = pathToFileURL(path.resolve(__dirname, '../../index.html')).href;
 
 const resetStorage = async (page) => {
-  await page.goto(appUrl);
+  await page.goto('/');
   await page.evaluate(async () => {
     localStorage.clear();
     await new Promise((resolve) => {

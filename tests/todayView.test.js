@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { logicalDayKey } from '../core.js';
-import { buildTodaySections } from '../todayView.js';
+import { logicalDayKey } from '../src/lib/core.ts';
+import { buildTodaySections, isCompletedForDay } from '../src/lib/todayModel.ts';
 
-const countTasks = (html) => (html.match(/class="task"/g) || []).length;
+const taskTitles = (list) => list.map((task) => task.title);
 
-describe('today view persistence', () => {
-  it('shows all today tasks after refresh', () => {
+describe('today model persistence', () => {
+  it('keeps today sections stable after refresh', () => {
     const now = new Date(2024, 0, 2, 9, 0, 0, 0).getTime();
     const dayKey = logicalDayKey(now);
     const tasks = [
@@ -15,6 +15,10 @@ describe('today view persistence', () => {
         type: 'daily',
         active: true,
         archivedAt: null,
+        createdAt: now,
+        dueAt: null,
+        doneAt: null,
+        templateKey: null,
         completions: { [dayKey]: true }
       },
       {
@@ -23,6 +27,10 @@ describe('today view persistence', () => {
         type: 'daily',
         active: true,
         archivedAt: null,
+        createdAt: now,
+        dueAt: null,
+        doneAt: null,
+        templateKey: null,
         completions: {}
       },
       {
@@ -31,7 +39,10 @@ describe('today view persistence', () => {
         type: 'scheduled',
         active: true,
         archivedAt: null,
+        createdAt: now,
         dueAt: now - 15 * 60 * 1000,
+        doneAt: null,
+        templateKey: null,
         completions: {}
       },
       {
@@ -40,7 +51,10 @@ describe('today view persistence', () => {
         type: 'scheduled',
         active: true,
         archivedAt: null,
+        createdAt: now,
         dueAt: now + 2 * 60 * 60 * 1000,
+        doneAt: null,
+        templateKey: null,
         completions: {}
       }
     ];
@@ -49,14 +63,18 @@ describe('today view persistence', () => {
     const refreshedTasks = JSON.parse(JSON.stringify(tasks));
     const after = buildTodaySections(refreshedTasks, now);
 
-    expect(countTasks(before.todayHtml)).toBe(3);
-    expect(countTasks(after.todayHtml)).toBe(3);
-    expect(before.todayHtml).toContain('Daily workout');
-    expect(after.todayHtml).toContain('Daily workout');
-    expect(after.todayHtml).toContain('Daily journal');
-    expect(after.todayHtml).toContain('Pay rent');
-    expect(after.todayHtml).toContain('done');
-    expect(after.upcomingCount).toBe(1);
-    expect(after.upcomingHtml).toContain('Dentist appointment');
+    expect(before.daily).toHaveLength(2);
+    expect(before.scheduledDue).toHaveLength(1);
+    expect(before.scheduledUpcoming).toHaveLength(1);
+
+    expect(after.daily).toHaveLength(2);
+    expect(after.scheduledDue).toHaveLength(1);
+    expect(after.scheduledUpcoming).toHaveLength(1);
+
+    expect(taskTitles(after.daily)).toEqual(['Daily journal', 'Daily workout']);
+    expect(taskTitles(after.scheduledDue)).toEqual(['Pay rent']);
+    expect(taskTitles(after.scheduledUpcoming)).toEqual(['Dentist appointment']);
+
+    expect(isCompletedForDay(after.daily[1], dayKey)).toBe(true);
   });
 });

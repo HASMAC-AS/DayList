@@ -19,7 +19,7 @@ import {
   suggestionScore,
   toDatetimeLocalValue,
   toJsonSafe
-} from '../core.js';
+} from '../src/lib/core.ts';
 
 describe('core utilities', () => {
   it('pads numbers to two digits', () => {
@@ -89,7 +89,7 @@ describe('core utilities', () => {
     expect(errToObj(null)).toBeNull();
 
     expect(redact('secret')).toBe('******');
-    expect(redact('abcdefghijklmnopqrstuvwxyz', 4)).toBe('abcd…wxyz (len=26)');
+    expect(redact('abcdefghijklmnopqrstuvwxyz', 4)).toBe('abcd...wxyz (len=26)');
   });
 
   it('serializes JSON-safe values', () => {
