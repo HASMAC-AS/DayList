@@ -11,11 +11,28 @@ import * as Y from 'https://esm.sh/yjs@13.6.28';
 import { WebrtcProvider } from 'https://esm.sh/y-webrtc@10.3.0';
 import { IndexeddbPersistence } from 'https://esm.sh/y-indexeddb@9.0.12';
 import Fuse from 'https://esm.sh/fuse.js@7.1.0';
+import {
+  BOUNDARY_HOUR,
+  DAY_MS,
+  debounce,
+  errToObj,
+  escapeHtml,
+  formatDateTime,
+  localDateKeyFrom,
+  logicalDayKey,
+  minutesOfDay,
+  normalizeTitle,
+  pad2,
+  parseDatetimeLocalValue,
+  parseSignalingList,
+  randomKey,
+  redact,
+  suggestionScore,
+  toDatetimeLocalValue,
+  toJsonSafe
+} from './core.js';
 
 /* ------------------------------ Utilities ------------------------------ */
-const DAY_MS = 24 * 60 * 60 * 1000;
-const BOUNDARY_HOUR = 3; // day resets at 3am local
-
 const DEFAULT_SIGNALING = [
   'wss://signaling.yjs.dev',
   'wss://y-webrtc-signaling-eu.herokuapp.com',
@@ -29,76 +46,6 @@ const METERED_TURN_ENDPOINT =
 const METERED_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 const $ = (id) => document.getElementById(id);
-const pad2 = (n) => String(n).padStart(2, '0');
-
-function localDateKeyFrom(ts) {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-
-function logicalDayKey(ts = Date.now()) {
-  // Shift time backwards by BOUNDARY_HOUR so 00:00-02:59 counts as previous day.
-  return localDateKeyFrom(ts - BOUNDARY_HOUR * 60 * 60 * 1000);
-}
-
-function minutesOfDay(ts = Date.now()) {
-  const d = new Date(ts);
-  return d.getHours() * 60 + d.getMinutes();
-}
-
-function circularMinuteDistance(a, b) {
-  const diff = Math.abs(a - b) % 1440;
-  return Math.min(diff, 1440 - diff);
-}
-
-function formatDateTime(ts) {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-function toDatetimeLocalValue(ts) {
-  const d = new Date(ts);
-  const yyyy = d.getFullYear();
-  const mm = pad2(d.getMonth() + 1);
-  const dd = pad2(d.getDate());
-  const hh = pad2(d.getHours());
-  const mi = pad2(d.getMinutes());
-  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
-}
-
-function parseDatetimeLocalValue(value) {
-  // value: "YYYY-MM-DDTHH:mm" in local time.
-  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2})$/.exec(value);
-  if (!m) return null;
-  const [_, y, mo, d, h, mi] = m;
-  return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), 0, 0).getTime();
-}
-
-function normalizeTitle(title) {
-  return title.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
-function randomKey(bytes = 12) {
-  const b = crypto.getRandomValues(new Uint8Array(bytes));
-  return [...b].map(x => x.toString(16).padStart(2, '0')).join('');
-}
-
-function debounce(fn, ms) {
-  let t = null;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
-}
-
-function parseSignalingList(s) {
-  const raw = String(s || '').trim();
-  if (!raw) return [];
-  return raw
-    .split(',')
-    .map(x => x.trim())
-    .filter(Boolean);
-}
 
 /* ------------------------- Debug + Persistence Logs ------------------------- */
 
@@ -143,29 +90,6 @@ let __dlLogBuf = (() => {
   }
 })();
 
-function errToObj(e) {
-  if (!e) return null;
-  if (typeof e === 'string') return { message: e };
-  return {
-    name: e.name,
-    message: e.message,
-    stack: e.stack
-  };
-}
-
-// Avoid storing non-JSON-safe stuff in the persisted debug log.
-function toJsonSafe(x) {
-  if (x == null) return x;
-  try { return JSON.parse(JSON.stringify(x)); } catch { return String(x); }
-}
-
-// Redact secrets (encryption keys, TURN keys, etc)
-function redact(s, keep = 4) {
-  const t = String(s || '');
-  if (!t) return '';
-  if (t.length <= keep * 2) return '*'.repeat(t.length);
-  return `${t.slice(0, keep)}…${t.slice(-keep)} (len=${t.length})`;
-}
 
 const flushDebugLog = debounce(() => {
   try { safeSetLS(LS_DEBUG_LOG, JSON.stringify(__dlLogBuf.slice(-DEBUG_LOG_MAX))); } catch {}
@@ -917,29 +841,6 @@ function rebuildTemplateIndex() {
   });
 }
 
-function suggestionScore(item, fuseScore, nowTs) {
-  const fuzzy = 1 / (1 + (fuseScore ?? 0.6) * 8);
-  const usage = Math.max(0, item.usageCount || 0);
-  const pop = Math.log10(usage + 1);
-  const first = item.firstUsedAt || nowTs;
-  const daysSpan = Math.max(1, (nowTs - first) / DAY_MS);
-  const freq = Math.log10((usage / daysSpan) + 1);
-  const last = item.lastUsedAt || 0;
-  const daysSinceLast = last ? (nowTs - last) / DAY_MS : 999;
-  const recency = 1 / (1 + daysSinceLast / 3);
-  const near = 1 / (1 + circularMinuteDistance(minutesOfDay(nowTs), item.meanMinutes || minutesOfDay(nowTs)) / 90);
-
-  return 3.0 * fuzzy + 1.0 * pop + 1.2 * freq + 1.4 * recency + 0.8 * near;
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
 
 function renderSuggestions() {
   const q = els.titleInput.value.trim();
