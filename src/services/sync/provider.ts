@@ -60,6 +60,7 @@ export async function connectProvider(opts: {
   const startupResynced = new Set<string>();
   const resyncPending = new Map<string, { reason: string; attempts: number }>();
   const knownPeers = new Set<string>();
+  const hookedPeers = new Set<string>();
   let staleInterval: ReturnType<typeof setInterval> | null = null;
 
   const STALE_CHECK_INTERVAL_MS = 5_000;
@@ -443,6 +444,40 @@ export async function connectProvider(opts: {
       }
       if (reasons.length) requestResync(peerId, reasons.join('+'));
     });
+
+    const room = getRoom();
+    if (room && room.webrtcConns) {
+      webrtcList.forEach((peerId) => {
+        if (!peerId || typeof peerId !== 'string') return;
+        if (hookedPeers.has(peerId)) return;
+        const conn = room.webrtcConns.get(peerId);
+        if (!conn || !(conn as { peer?: any }).peer) return;
+        const peer = (conn as { peer: any }).peer;
+        hookedPeers.add(peerId);
+        try {
+          peer.on('connect', () => {
+            opts.onLog?.('webrtc:peer_connected', { peerId });
+          });
+          peer.on('close', () => {
+            hookedPeers.delete(peerId);
+            opts.onLog?.('webrtc:peer_closed', { peerId });
+          });
+          peer.on('error', (error: unknown) => {
+            opts.onLog?.('webrtc:peer_error', { peerId, error: errToObj(error) }, 'WARN');
+          });
+          if (typeof peer.on === 'function') {
+            peer.on('iceStateChange', (state: unknown) => {
+              opts.onLog?.('webrtc:ice_state', { peerId, state });
+            });
+            peer.on('signalingStateChange', (state: unknown) => {
+              opts.onLog?.('webrtc:signal_state', { peerId, state });
+            });
+          }
+        } catch (error) {
+          opts.onLog?.('webrtc:peer_hook_failed', { peerId, error: errToObj(error) }, 'WARN');
+        }
+      });
+    }
 
     knownPeers.clear();
     webrtcList.forEach((peerId) => {
