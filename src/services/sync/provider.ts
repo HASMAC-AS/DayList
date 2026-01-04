@@ -1,4 +1,5 @@
 import { SignalingConn, WebrtcProvider } from 'y-webrtc';
+import { WebrtcConn } from 'y-webrtc';
 import * as decoding from 'lib0/decoding';
 import { errToObj } from '../../lib/core';
 import type { YDocHandles } from './ydoc';
@@ -40,6 +41,12 @@ export async function connectProvider(opts: {
   let hasPeer = false;
   let peerSeen = false;
   let peerSeenAt = 0;
+  const peerLastSeen = new Map<string, number>();
+  const pendingPeers = new Set<string>();
+  let staleInterval: ReturnType<typeof setInterval> | null = null;
+
+  const PEER_STALE_MS = 30_000;
+  const STALE_CHECK_INTERVAL_MS = 5_000;
 
   const currentInterval = () => (throttleActive ? SIGNAL_THROTTLE_INTERVAL_MS : SIGNAL_BASE_INTERVAL_MS);
 
@@ -127,6 +134,16 @@ export async function connectProvider(opts: {
     }
   });
 
+  const getRoom = () => (provider as { room?: any }).room || null;
+  const getLocalPeerId = () => {
+    const room = getRoom();
+    return room?.peerId || null;
+  };
+  const getAnyConn = () => {
+    const conns = provider.signalingConns || [];
+    return conns.find((conn) => conn.connected || conn.connecting) || conns[0] || null;
+  };
+
   const decodeBase64 = (input: string) => {
     const bin = atob(input);
     const out = new Uint8Array(bin.length);
@@ -158,7 +175,40 @@ export async function connectProvider(opts: {
     return message;
   };
 
-  const logDecrypted = (direction: 'send' | 'recv', url: string, message: unknown) => {
+  const ensureWebrtcConn = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
+    const room = getRoom();
+    if (!room) {
+      pendingPeers.add(peerId);
+      return;
+    }
+    const localPeerId = room.peerId;
+    if (!peerId || peerId === localPeerId) return;
+    if (room.webrtcConns?.has(peerId)) return;
+
+    try {
+      const webrtcConn = new WebrtcConn(conn, true, peerId, room);
+      room.webrtcConns.set(peerId, webrtcConn);
+      opts.onLog?.('webrtc:manual_connect', { peerId, reason, detail });
+    } catch (error) {
+      opts.onLog?.('webrtc:manual_connect_failed', { peerId, reason, error: errToObj(error) }, 'WARN');
+    }
+  };
+
+  const notePeerSeen = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
+    const localPeerId = getLocalPeerId();
+    if (!peerId || peerId === localPeerId) return;
+    const now = Date.now();
+    const last = peerLastSeen.get(peerId);
+    const stale = last != null && now - last > PEER_STALE_MS;
+    const isNew = last == null;
+    peerLastSeen.set(peerId, now);
+
+    if (isNew || stale) {
+      ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
+    }
+  };
+
+  const logDecrypted = (direction: 'send' | 'recv', url: string, message: unknown, conn?: SignalingConn) => {
     if (!message || typeof message !== 'object') return;
     const msg = message as { type?: string; data?: unknown; from?: string; to?: string };
     if (msg.type !== 'publish' || typeof msg.data !== 'string') return;
@@ -171,6 +221,12 @@ export async function connectProvider(opts: {
           to: msg.to,
           decrypted
         });
+        if (direction === 'recv' && conn && decrypted && typeof decrypted === 'object') {
+          const dec = decrypted as { from?: string; type?: string };
+          if (typeof dec.from === 'string' && dec.from) {
+            notePeerSeen(dec.from, conn, 'signal:decrypted', { type: dec.type });
+          }
+        }
       })
       .catch((error) => {
         opts.onLog?.(
@@ -179,6 +235,18 @@ export async function connectProvider(opts: {
           'WARN'
         );
       });
+  };
+
+  const flushPendingPeers = (reason: string) => {
+    if (pendingPeers.size === 0) return;
+    const conn = getAnyConn();
+    if (!conn) return;
+    const room = getRoom();
+    if (!room) return;
+    pendingPeers.forEach((peerId) => {
+      ensureWebrtcConn(peerId, conn, `pending:${reason}`);
+    });
+    pendingPeers.clear();
   };
 
   const computeHasPeer = () => provider.awareness.getStates().size > 1;
@@ -209,10 +277,32 @@ export async function connectProvider(opts: {
   const originalDestroy = provider.destroy.bind(provider);
   provider.destroy = () => {
     stopThrottle(false);
+    if (staleInterval) {
+      clearInterval(staleInterval);
+      staleInterval = null;
+    }
     return originalDestroy();
   };
 
   startThrottleTimer('init');
+
+  staleInterval = setInterval(() => {
+    const now = Date.now();
+    const conn = getAnyConn();
+    if (!conn) return;
+    peerLastSeen.forEach((lastSeen, peerId) => {
+      if (now - lastSeen > PEER_STALE_MS) {
+        peerLastSeen.set(peerId, now);
+        ensureWebrtcConn(peerId, conn, 'stale_check');
+      }
+    });
+  }, STALE_CHECK_INTERVAL_MS);
+
+  const maybeFlushPending = () => flushPendingPeers('room_ready');
+  const keyPromise = (provider as { key?: PromiseLike<unknown> }).key;
+  if (keyPromise && typeof keyPromise.then === 'function') {
+    keyPromise.then(maybeFlushPending).catch(() => {});
+  }
 
   provider.awareness.on('change', (...args: unknown[]) => {
     opts.onAwarenessChange();
@@ -253,6 +343,7 @@ export async function connectProvider(opts: {
     conn.on('connect', () => {
       updateStatus();
       opts.onLog?.('signal:connect', { url: conn.url });
+      flushPendingPeers('signaling_connect');
     });
     conn.on('disconnect', () => {
       updateStatus();
@@ -261,13 +352,17 @@ export async function connectProvider(opts: {
     conn.on('message', (message: unknown) => {
       updateStatus();
       opts.onLog?.('signal:recv', { url: conn.url, message: sanitizeSignalMessage(message) });
-      logDecrypted('recv', conn.url, message);
+      logDecrypted('recv', conn.url, message, conn);
       if (message && typeof message === 'object') {
         const msg = message as { type?: string; from?: string; peers?: unknown };
         if (typeof msg.from === 'string' && msg.from) {
           markPeerSeen('signal:from', { type: msg.type });
+          notePeerSeen(msg.from, conn, 'signal:from', { type: msg.type });
         } else if (msg.type === 'welcome' && Array.isArray(msg.peers) && msg.peers.length > 0) {
           markPeerSeen('signal:welcome', { count: msg.peers.length });
+          msg.peers.forEach((peerId) => {
+            if (typeof peerId === 'string') notePeerSeen(peerId, conn, 'signal:welcome');
+          });
         }
       }
     });
