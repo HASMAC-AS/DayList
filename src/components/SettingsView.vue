@@ -20,7 +20,7 @@
     </section>
 
     <section class="settings-block">
-      <details open>
+      <details>
         <summary>History</summary>
         <div class="bd">
           <HistoryPanel />

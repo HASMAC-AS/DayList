@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "fuse.js": "^7.1.0",
+    "lucide-vue-next": "^0.562.0",
     "pinia": "^2.1.7",
     "vue": "^3.4.0",
     "y-indexeddb": "^9.0.12",
@@ -21,10 +22,10 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
-    "@vitejs/plugin-vue": "^5.0.0",
-    "@vue/test-utils": "^2.4.6",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
+    "@vitejs/plugin-vue": "^5.0.0",
+    "@vue/test-utils": "^2.4.6",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-vue": "^9.20.0",

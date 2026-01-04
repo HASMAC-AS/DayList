@@ -14,7 +14,7 @@
     </transition>
 
     <div v-if="view !== 'main'" class="footer">
-      ~
+
     </div>
   </div>
 
@@ -27,12 +27,7 @@
     :aria-label="view === 'main' ? 'Open settings' : 'Back'"
     @click="handleBack"
   >
-    <svg v-if="view === 'main'" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="3.25" />
-      <path
-        d="M19.2 15a2 2 0 0 0 .4 2.1l.15.15a2.4 2.4 0 0 1-3.4 3.4l-.15-.15a2 2 0 0 0-2.1-.4 2 2 0 0 0-1.2 1.9V22a2.4 2.4 0 0 1-4.8 0v-.2a2 2 0 0 0-1.2-1.9 2 2 0 0 0-2.1.4l-.15.15a2.4 2.4 0 0 1-3.4-3.4l.15-.15a2 2 0 0 0 .4-2.1 2 2 0 0 0-1.9-1.2H2a2.4 2.4 0 0 1 0-4.8h.2a2 2 0 0 0 1.9-1.2 2 2 0 0 0-.4-2.1l-.15-.15a2.4 2.4 0 0 1 3.4-3.4l.15.15a2 2 0 0 0 2.1.4 2 2 0 0 0 1.2-1.9V2a2.4 2.4 0 0 1 4.8 0v.2a2 2 0 0 0 1.2 1.9 2 2 0 0 0 2.1-.4l.15-.15a2.4 2.4 0 0 1 3.4 3.4l-.15.15a2 2 0 0 0-.4 2.1 2 2 0 0 0 1.9 1.2H22a2.4 2.4 0 0 1 0 4.8h-.2a2 2 0 0 0-1.9 1.2Z"
-      />
-    </svg>
+    <Settings v-if="view === 'main'" class="fab-icon" aria-hidden="true" />
     <span v-else>&larr;</span>
   </button>
 
@@ -56,6 +51,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { Settings } from 'lucide-vue-next';
 import TaskComposer from './components/TaskComposer.vue';
 import TaskListMain from './components/TaskListMain.vue';
 import SettingsView from './components/SettingsView.vue';

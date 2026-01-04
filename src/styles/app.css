@@ -839,12 +839,13 @@ details .bd {
   box-shadow: 0 16px 30px rgba(15, 23, 42, 0.16);
 }
 
+.fab-icon,
 .fab-left svg {
   width: 22px;
   height: 22px;
   fill: none;
   stroke: var(--text);
-  stroke-width: 1.6;
+  stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
