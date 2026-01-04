@@ -38,6 +38,25 @@
         </div>
       </div>
 
+      <div class="row" style="margin-top: 12px">
+        <div class="grow">
+          <div class="hint">Settings JSON (room + enc + signaling + TURN). Copy/paste between clients.</div>
+          <textarea
+            id="settingsJson"
+            v-model="settingsJsonDraft"
+            class="mono"
+            rows="4"
+            spellcheck="false"
+            @focus="jsonFocused = true"
+            @blur="jsonFocused = false"
+          ></textarea>
+        </div>
+        <div class="col">
+          <button id="copySettingsBtn" @click="copySettingsJson">Copy JSON</button>
+          <button id="applySettingsBtn" @click="applySettingsJson">Apply JSON</button>
+        </div>
+      </div>
+
       <div class="hint" style="margin-top: 10px">
         WebRTC works across the internet; TURN usually makes it \"just work\" across strict NATs/corporate Wi-Fi.
         Using TURN costs bandwidth - so that API key is basically a small money faucet.
@@ -63,12 +82,29 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue';
 import { useDaylistStore } from '../stores/daylist';
 import { writeKeysToUrl } from '../services/sync/keys';
 import { useToastBus } from '../services/toast';
 
 const store = useDaylistStore();
 const { show: toast } = useToastBus();
+
+const buildSettingsPayload = () => ({
+  v: 1,
+  room: store.keys.room,
+  enc: store.keys.enc,
+  sig: store.keys.sig,
+  turnKey: store.keys.turnKey
+});
+
+const settingsJson = computed(() => JSON.stringify(buildSettingsPayload(), null, 2));
+const settingsJsonDraft = ref(settingsJson.value);
+const jsonFocused = ref(false);
+
+watch(settingsJson, (next) => {
+  if (!jsonFocused.value) settingsJsonDraft.value = next;
+});
 
 const copyLink = async () => {
   writeKeysToUrl(store.keys);
@@ -78,6 +114,40 @@ const copyLink = async () => {
     toast('Link copied');
   } catch {
     window.prompt('Copy this link:', link);
+  }
+};
+
+const copySettingsJson = async () => {
+  try {
+    await navigator.clipboard.writeText(settingsJson.value);
+    toast('Settings JSON copied');
+  } catch {
+    window.prompt('Copy settings JSON:', settingsJson.value);
+  }
+};
+
+const applySettingsJson = async () => {
+  try {
+    const parsed = JSON.parse(settingsJsonDraft.value || '{}');
+    const payload = parsed && typeof parsed === 'object' && 'keys' in parsed ? parsed.keys : parsed;
+    if (!payload || typeof payload !== 'object') {
+      toast('Invalid settings JSON');
+      return;
+    }
+    const next = payload as Partial<{
+      room: string;
+      enc: string;
+      sig: string;
+      turnKey: string;
+    }>;
+    if (typeof next.room === 'string') store.keys.room = next.room;
+    if (typeof next.enc === 'string') store.keys.enc = next.enc;
+    if (typeof next.sig === 'string') store.keys.sig = next.sig;
+    if (typeof next.turnKey === 'string') store.keys.turnKey = next.turnKey;
+    await store.connectSync();
+    toast('Settings applied');
+  } catch {
+    toast('Settings JSON invalid');
   }
 };
 
