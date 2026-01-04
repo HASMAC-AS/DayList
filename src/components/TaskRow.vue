@@ -1,47 +1,49 @@
 <template>
-  <div class="task" :data-id="task.id">
-    <label class="check">
-      <input
-        type="checkbox"
-        class="toggle"
-        :checked="completed"
-        @change="onToggle"
-      />
-      <span></span>
-    </label>
-    <div class="main">
-      <div class="rowline">
-        <div
-          class="title"
-          :class="{ done: completed }"
-          title="Double-click to rename"
-          @dblclick="onRename"
-        >
-          {{ task.title }}
-        </div>
-        <span v-if="task.type === 'scheduled' && task.dueAt" class="time">{{ dueLabel }}</span>
-      </div>
-      <div class="meta">
-        <span class="tag">{{ task.type === 'scheduled' ? 'scheduled' : 'daily' }}</span>
-        <span v-if="upcoming" class="tag">upcoming</span>
-      </div>
-    </div>
-    <div class="actions">
+  <div class="task-wrap" :class="{ swiped: swiped }" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
+    <div class="task-actions">
       <button
         v-if="task.type === 'daily'"
-        class="chip act"
-        :data-act="task.active ? 'deactivate' : 'activate'"
+        class="task-action hide"
+        type="button"
         @click="onToggleActive"
       >
         {{ task.active ? 'Hide' : 'Show' }}
       </button>
-      <button class="chip" data-act="archive" @click="$emit('archive', task.id)">Archive</button>
+      <button class="task-action archive" type="button" @click="onArchive">Archive</button>
+    </div>
+    <div class="task" :data-id="task.id" :style="{ transform: `translateX(${offsetX}px)` }" @click="onClickTask">
+      <label class="check">
+        <input
+          type="checkbox"
+          class="toggle"
+          :checked="completed"
+          @change="onToggle"
+        />
+        <span></span>
+      </label>
+      <div class="main">
+        <div class="rowline">
+          <div
+            class="title"
+            :class="{ done: completed }"
+            title="Double-click to rename"
+            @dblclick="onRename"
+          >
+            {{ task.title }}
+          </div>
+          <span v-if="task.type === 'scheduled' && task.dueAt" class="time">{{ dueLabel }}</span>
+        </div>
+        <div class="meta">
+          <span class="tag">{{ task.type === 'scheduled' ? 'scheduled' : 'daily' }}</span>
+          <span v-if="upcoming" class="tag">upcoming</span>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { formatDateTime } from '../lib/core';
 import { isCompletedForDay } from '../lib/todayModel';
 import type { Task } from '../lib/types';
@@ -59,6 +61,11 @@ const emit = defineEmits<{
 const completed = computed(() => isCompletedForDay(props.task, props.dayKey));
 const dueLabel = computed(() => (props.task.dueAt ? formatDateTime(props.task.dueAt) : ''));
 
+const startX = ref(0);
+const offsetX = ref(0);
+const swiped = ref(false);
+const maxSwipe = -140;
+
 const onToggle = (event: Event) => {
   const target = event.target as HTMLInputElement;
   const checked = target.checked;
@@ -68,6 +75,7 @@ const onToggle = (event: Event) => {
 const onToggleActive = () => {
   if (props.task.active) emit('deactivate', props.task.id);
   else emit('activate', props.task.id);
+  resetSwipe();
 };
 
 const onRename = () => {
@@ -75,5 +83,42 @@ const onRename = () => {
   const next = window.prompt('Rename task:', current);
   if (next == null) return;
   emit('rename', props.task.id, next);
+};
+
+const onArchive = () => {
+  emit('archive', props.task.id);
+  resetSwipe();
+};
+
+const onTouchStart = (event: TouchEvent) => {
+  startX.value = event.touches[0]?.clientX ?? 0;
+};
+
+const onTouchMove = (event: TouchEvent) => {
+  const currentX = event.touches[0]?.clientX ?? startX.value;
+  const delta = currentX - startX.value;
+  if (delta < 0) {
+    offsetX.value = Math.max(delta, maxSwipe);
+  } else if (!swiped.value) {
+    offsetX.value = 0;
+  }
+};
+
+const onTouchEnd = () => {
+  if (offsetX.value < -60) {
+    swiped.value = true;
+    offsetX.value = maxSwipe;
+  } else {
+    resetSwipe();
+  }
+};
+
+const resetSwipe = () => {
+  swiped.value = false;
+  offsetX.value = 0;
+};
+
+const onClickTask = () => {
+  if (swiped.value) resetSwipe();
 };
 </script>

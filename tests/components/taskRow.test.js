@@ -34,7 +34,7 @@ describe('TaskRow', () => {
     await wrapper.find('input.toggle').setValue(false);
     expect(wrapper.emitted('toggle')[0]).toEqual([task.id, false]);
 
-    await wrapper.find('button[data-act="archive"]').trigger('click');
+    await wrapper.find('button.task-action.archive').trigger('click');
     expect(wrapper.emitted('archive')[0]).toEqual([task.id]);
   });
 });

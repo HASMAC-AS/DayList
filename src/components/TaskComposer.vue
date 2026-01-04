@@ -11,7 +11,6 @@
           @keydown.enter.prevent="handleAdd"
         />
       </div>
-      <button id="addBtn" style="min-width: 120px" @click="handleAdd">Add</button>
     </div>
 
     <div class="typeRow">
@@ -36,6 +35,11 @@
     </div>
 
     <SuggestionsList :items="suggestions" @pick="applySuggestion" />
+
+    <div class="composer-actions">
+      <button type="button" class="chip ghost" @click="$emit('close')">Cancel</button>
+      <button id="addBtn" type="button" class="chip primary" @click="handleAdd">Add task</button>
+    </div>
   </div>
 </template>
 
@@ -44,6 +48,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import SuggestionsList from './SuggestionsList.vue';
 import type { TaskType, TemplateStat } from '../lib/types';
 import { useDaylistStore } from '../stores/daylist';
+
+const emit = defineEmits<{ close: []; added: [] }>();
 
 const store = useDaylistStore();
 
@@ -77,6 +83,8 @@ const handleAdd = () => {
     const input = document.getElementById('titleInput') as HTMLInputElement | null;
     input?.focus();
   });
+
+  emit('added');
 };
 
 const applySuggestion = (item: TemplateStat) => {
