@@ -1,0 +1,18 @@
+{
+  "name": "DayList",
+  "short_name": "DayList",
+  "description": "Repeating daily checklists + scheduled tasks. Offline-first with peer-to-peer sync.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
