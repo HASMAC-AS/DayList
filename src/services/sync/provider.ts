@@ -35,6 +35,8 @@ export async function connectProvider(opts: {
   let throttleActive = false;
   let throttleTimer: ReturnType<typeof setTimeout> | null = null;
   let hasPeer = false;
+  let peerSeen = false;
+  let peerSeenAt = 0;
 
   const currentInterval = () => (throttleActive ? SIGNAL_THROTTLE_INTERVAL_MS : SIGNAL_BASE_INTERVAL_MS);
 
@@ -73,15 +75,17 @@ export async function connectProvider(opts: {
   };
 
   const startThrottleTimer = (reason = 'start') => {
+    if (peerSeen) return;
     if (throttleTimer != null) clearTimeout(throttleTimer);
     throttleTimer = setTimeout(() => {
-      if (hasPeer) return;
+      if (hasPeer || peerSeen) return;
       if (!throttleActive) {
         throttleActive = true;
         opts.onLog?.('signal:throttle_on', {
           intervalMs: SIGNAL_THROTTLE_INTERVAL_MS,
           delayMs: SIGNAL_THROTTLE_DELAY_MS,
-          reason
+          reason,
+          peerSeen
         });
         if (sendTimer != null) {
           clearTimeout(sendTimer);
@@ -133,6 +137,14 @@ export async function connectProvider(opts: {
       hasPeer = false;
       startThrottleTimer(reason);
     }
+  };
+
+  const markPeerSeen = (reason: string, detail?: unknown) => {
+    if (peerSeen) return;
+    peerSeen = true;
+    peerSeenAt = Date.now();
+    stopThrottle();
+    opts.onLog?.('signal:peer_seen', { reason, detail, at: peerSeenAt });
   };
 
   const originalDestroy = provider.destroy.bind(provider);
@@ -187,6 +199,14 @@ export async function connectProvider(opts: {
     conn.on('message', (message: unknown) => {
       updateStatus();
       opts.onLog?.('signal:recv', { url: conn.url, message });
+      if (message && typeof message === 'object') {
+        const msg = message as { type?: string; from?: string; peers?: unknown };
+        if (typeof msg.from === 'string' && msg.from) {
+          markPeerSeen('signal:from', { type: msg.type });
+        } else if (msg.type === 'welcome' && Array.isArray(msg.peers) && msg.peers.length > 0) {
+          markPeerSeen('signal:welcome', { count: msg.peers.length });
+        }
+      }
     });
 
     const originalSend = conn.send.bind(conn);
