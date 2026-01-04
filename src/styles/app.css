@@ -457,6 +457,7 @@ input[type='datetime-local'] {
   border: 1px solid var(--border);
   background: var(--panel-soft-2);
   color: var(--text);
+  font-size: 16px;
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -468,6 +469,7 @@ textarea {
   border: 1px solid var(--border);
   background: var(--panel-soft-2);
   color: var(--text);
+  font-size: 16px;
   outline: none;
   resize: vertical;
   min-height: 96px;
