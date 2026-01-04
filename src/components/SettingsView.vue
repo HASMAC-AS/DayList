@@ -33,16 +33,17 @@
     </section>
 
     <section class="settings-block settings-actions-bottom">
-      <button class="chip ghost" type="button" @click="reloadApp">Reload</button>
+      <button class="chip ghost" type="button" :disabled="reloading" @click="reloadApp">Reload</button>
       <button class="chip primary" type="button" @click="$emit('openDiagnostics')">Diagnostics</button>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { buildTodaySections } from '../lib/todayModel';
 import { useDaylistStore } from '../stores/daylist';
+import { persistKeysToStorage, writeKeysToUrl } from '../services/sync/keys';
 import TaskRow from './TaskRow.vue';
 import HistoryPanel from './HistoryPanel.vue';
 import SyncBackupPanel from './SyncBackupPanel.vue';
@@ -51,8 +52,15 @@ defineEmits<{ openDiagnostics: [] }>();
 
 const store = useDaylistStore();
 const sections = computed(() => buildTodaySections(store.tasks, store.nowTs));
+const reloading = ref(false);
 
 const reloadApp = () => {
-  window.location.reload();
+  if (reloading.value) return;
+  reloading.value = true;
+  persistKeysToStorage(localStorage, store.keys);
+  writeKeysToUrl(store.keys);
+  window.setTimeout(() => {
+    window.location.reload();
+  }, 50);
 };
 </script>
