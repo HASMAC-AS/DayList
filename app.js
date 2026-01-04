@@ -413,10 +413,10 @@ const els = {
 
 let snapshotDirty = false;
 
-function writeSnapshot(reason = 'unknown') {
+function writeSnapshot(reason = 'unknown', { force = false } = {}) {
   // Only flush if something changed, unless it's an explicit lifecycle flush.
-  const force = reason === 'pagehide' || reason === 'beforeunload' || reason === 'visibility:hidden';
-  if (!snapshotDirty && !force) return;
+  const lifecycleFlush = reason === 'pagehide' || reason === 'beforeunload' || reason === 'visibility:hidden';
+  if (!snapshotDirty && !force && !lifecycleFlush) return;
 
   try {
     const before = docCounts();
@@ -600,7 +600,7 @@ function importSnapshot(snapshot) {
       }
     }
   });
-  writeSnapshot('importSnapshot');
+  writeSnapshot('importSnapshot', { force: true });
 }
 
 /* ---------------------------- Sync connect ---------------------------- */
@@ -752,7 +752,7 @@ function addTaskFromUI() {
     ytask.set('templateKey', touchTemplate(title, type, dueAt));
     yTasks.set(id, ytask);
   });
-  writeSnapshot('addTaskFromUI');
+  writeSnapshot('addTaskFromUI', { force: true });
 
   els.titleInput.value = '';
   els.titleInput.focus();
@@ -780,7 +780,7 @@ function toggleCompletion(id, checked) {
       if (type === 'scheduled') ytask.set('doneAt', null);
     }
   });
-  writeSnapshot('toggleCompletion');
+  writeSnapshot('toggleCompletion', { force: true });
 }
 
 function archiveTask(id) {
@@ -789,7 +789,7 @@ function archiveTask(id) {
     if (!ytask) return;
     ytask.set('archivedAt', Date.now());
   });
-  writeSnapshot('archiveTask');
+  writeSnapshot('archiveTask', { force: true });
 }
 
 function renameTask(id, newTitle) {
@@ -804,7 +804,7 @@ function renameTask(id, newTitle) {
     const dueAt = ytask.get('dueAt') == null ? null : Number(ytask.get('dueAt'));
     ytask.set('templateKey', touchTemplate(title, type, dueAt));
   });
-  writeSnapshot('renameTask');
+  writeSnapshot('renameTask', { force: true });
 }
 
 function setTaskActive(id, active) {
@@ -813,7 +813,7 @@ function setTaskActive(id, active) {
     if (!ytask) return;
     ytask.set('active', !!active);
   });
-  writeSnapshot('setTaskActive');
+  writeSnapshot('setTaskActive', { force: true });
 }
 
 /* ------------------------- Suggestion ranking -------------------------- */
