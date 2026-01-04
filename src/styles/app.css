@@ -61,7 +61,7 @@ body {
   margin: 0;
   font-family: var(--font);
   color: var(--text);
-  background: transparent;
+  background: var(--app-bg);
   position: relative;
 }
 
@@ -72,6 +72,20 @@ body::before {
   background: var(--app-bg);
   z-index: -1;
   pointer-events: none;
+}
+
+#app {
+  min-height: 100%;
+  background: transparent;
+}
+
+@supports (height: 100lvh) {
+  html,
+  body,
+  #app {
+    min-height: 100lvh;
+    height: 100lvh;
+  }
 }
 
 .wrap {
