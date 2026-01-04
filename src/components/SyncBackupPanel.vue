@@ -30,7 +30,12 @@
           <input id="turnKeyInput" v-model="store.keys.turnKey" type="password" placeholder="optional but recommended" />
         </div>
         <label class="checkbox">
-          <input id="turnEnabledInput" v-model="store.keys.turnEnabled" type="checkbox" />
+          <input
+            id="turnEnabledInput"
+            v-model="store.keys.turnEnabled"
+            type="checkbox"
+            @change="applyTurnToggle"
+          />
           Use TURN
         </label>
       </div>
@@ -88,7 +93,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useDaylistStore } from '../stores/daylist';
-import { writeKeysToUrl } from '../services/sync/keys';
+import { persistKeysToStorage, writeKeysToUrl } from '../services/sync/keys';
 import { useToastBus } from '../services/toast';
 
 const store = useDaylistStore();
@@ -129,6 +134,12 @@ const copySettingsJson = async () => {
   } catch {
     window.prompt('Copy settings JSON:', settingsJson.value);
   }
+};
+
+const applyTurnToggle = async () => {
+  persistKeysToStorage(localStorage, store.keys);
+  writeKeysToUrl(store.keys);
+  await store.connectSync();
 };
 
 const applySettingsJson = async () => {
