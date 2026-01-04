@@ -51,11 +51,17 @@ function saveMeteredIceCache(storage: Storage, iceServers: RTCIceServer[], now: 
 
 export async function getIceServers(opts: {
   turnKey: string;
+  allowTurn?: boolean;
   fetchFn: typeof fetch;
   storage: Storage;
   now: () => number;
   log?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR') => void;
 }): Promise<RTCIceServer[]> {
+  if (opts.allowTurn === false) {
+    opts.log?.('turn:skipped_stun_only');
+    return STUN_FALLBACK;
+  }
+
   const key = (opts.turnKey || '').trim();
   if (!key) return STUN_FALLBACK;
 

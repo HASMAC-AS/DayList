@@ -35,6 +35,7 @@ import { useToastBus } from '../services/toast';
 
 const DEFAULT_SIGNALING = ['wss://daylist-signaling.onrender.com/ws'];
 const HISTORY_DAYS = 7;
+const TURN_UPGRADE_DELAY_MS = 6000;
 
 export const useDaylistStore = defineStore('daylist', () => {
   const keys = reactive<SyncKeys>({
@@ -62,6 +63,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const snapshotMirror = shallowRef<ReturnType<typeof createSnapshotMirror> | null>(null);
   const logger = shallowRef<DebugLogger | null>(null);
   const initialized = ref(false);
+  let turnUpgradeTimer: number | null = null;
 
   const logEntries = ref<
     Array<{
@@ -231,8 +233,29 @@ export const useDaylistStore = defineStore('daylist', () => {
     providerConnected.value = provider.value?.connected ?? false;
   };
 
+  const clearTurnUpgradeTimer = () => {
+    if (turnUpgradeTimer != null) {
+      window.clearTimeout(turnUpgradeTimer);
+      turnUpgradeTimer = null;
+    }
+  };
+
   const connectSync = async () => {
     if (!ydocHandles.value) return;
+    const hasPeers = () => peerCount.value > 0 || webrtcPeers.value.length > 0;
+
+    const maybeSkipTurn = (reason: string) => {
+      if (!turnUpgradeTimer) return false;
+      if (!hasPeers()) return false;
+      logEvent('turn:skip_peers_present', {
+        reason,
+        peerCount: peerCount.value,
+        webrtcPeers: webrtcPeers.value.length
+      });
+      clearTurnUpgradeTimer();
+      return true;
+    };
+
     const room = (keys.room || '').trim();
     const enc = (keys.enc || '').trim();
     const sigRaw = (keys.sig || '').trim();
@@ -254,54 +277,94 @@ export const useDaylistStore = defineStore('daylist', () => {
     const sig = sigList.length ? sigList : DEFAULT_SIGNALING;
     signaling.value = sig;
 
-    const iceServers = await getIceServers({
+    const connectWithIce = async (iceServers: RTCIceServer[], context: string) => {
+      const hasTurn = iceServers.some((server) => {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        return urls.some((url) => typeof url === 'string' && (url.startsWith('turn:') || url.startsWith('turns:')));
+      });
+      usingTurn.value = hasTurn;
+      peerCount.value = 0;
+      providerConnected.value = false;
+      webrtcPeers.value = [];
+      bcPeers.value = [];
+
+      if (provider.value) {
+        try {
+          provider.value.destroy();
+        } catch {
+          // ignore
+        }
+        provider.value = null;
+      }
+
+      provider.value = await connectProvider({
+        doc: ydocHandles.value,
+        room,
+        enc,
+        signaling: sig,
+        iceServers,
+        onAwarenessChange: () => {
+          updateSyncBadge();
+          rebuildDerivedState();
+          maybeSkipTurn('awareness');
+        },
+        onSignalingStatus: (status) => {
+          signalingStatus[status.url] = status;
+        },
+        onPeers: (peers) => {
+          webrtcPeers.value = peers.webrtcPeers;
+          bcPeers.value = peers.bcPeers;
+          maybeSkipTurn('peers');
+        },
+        onLog: logEvent
+      });
+
+      updateSyncBadge();
+      logEvent('sync:provider_connected', { context, usingTurn: hasTurn });
+
+      if (context === 'turn' && !hasTurn && turnKey) toast('TURN fetch failed; staying STUN-only');
+      else if (context === 'turn' && hasTurn) toast('Using Metered TURN for ICE');
+      else toast('Using STUN-only ICE');
+    };
+
+    clearTurnUpgradeTimer();
+
+    const stunOnlyIce = await getIceServers({
       turnKey,
+      allowTurn: false,
       fetchFn: fetch,
       storage: localStorage,
       now: () => Date.now(),
       log: logEvent
     });
 
-    const hasTurn = iceServers.some((server) => {
-      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-      return urls.some((url) => typeof url === 'string' && (url.startsWith('turn:') || url.startsWith('turns:')));
-    });
-    usingTurn.value = hasTurn;
+    await connectWithIce(stunOnlyIce, 'stun');
 
-    if (provider.value) {
-      try {
-        provider.value.destroy();
-      } catch {
-        // ignore
-      }
-      provider.value = null;
+    if (turnKey) {
+      turnUpgradeTimer = window.setTimeout(async () => {
+        if (hasPeers()) {
+          logEvent('turn:skip_peers_present', {
+            reason: 'delay_check',
+            peerCount: peerCount.value,
+            webrtcPeers: webrtcPeers.value.length
+          });
+          clearTurnUpgradeTimer();
+          return;
+        }
+
+        const iceServers = await getIceServers({
+          turnKey,
+          allowTurn: true,
+          fetchFn: fetch,
+          storage: localStorage,
+          now: () => Date.now(),
+          log: logEvent
+        });
+
+        await connectWithIce(iceServers, 'turn');
+        clearTurnUpgradeTimer();
+      }, TURN_UPGRADE_DELAY_MS);
     }
-
-    provider.value = await connectProvider({
-      doc: ydocHandles.value,
-      room,
-      enc,
-      signaling: sig,
-      iceServers,
-      onAwarenessChange: () => {
-        updateSyncBadge();
-        rebuildDerivedState();
-      },
-      onSignalingStatus: (status) => {
-        signalingStatus[status.url] = status;
-      },
-      onPeers: (peers) => {
-        webrtcPeers.value = peers.webrtcPeers;
-        bcPeers.value = peers.bcPeers;
-      },
-      onLog: logEvent
-    });
-
-    updateSyncBadge();
-
-    if (turnKey && !hasTurn) toast('TURN fetch failed; falling back to STUN only');
-    else if (turnKey) toast('Using Metered TURN for ICE');
-    else toast('Using STUN-only ICE');
   };
 
   const addTask = (input: { title: string; type: TaskType; dueAt: number | null }) => {

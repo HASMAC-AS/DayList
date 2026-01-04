@@ -1,6 +1,5 @@
 <template>
   <div class="main-list">
-    <div v-if="tasks.length === 0" class="empty">No tasks yet. Tap + to add one.</div>
     <transition-group id="todayList" name="task-slide" tag="div" class="task-list">
       <TaskRow
         v-for="task in tasks"
