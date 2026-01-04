@@ -1,4 +1,6 @@
 import { SignalingConn, WebrtcProvider } from 'y-webrtc';
+import * as decoding from 'lib0/decoding';
+import { errToObj } from '../../lib/core';
 import type { YDocHandles } from './ydoc';
 
 export interface ProviderStatus {
@@ -125,6 +127,60 @@ export async function connectProvider(opts: {
     }
   });
 
+  const decodeBase64 = (input: string) => {
+    const bin = atob(input);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) {
+      out[i] = bin.charCodeAt(i);
+    }
+    return out;
+  };
+
+  const decryptSignalPayload = async (payload: string) => {
+    const key = (provider as { room?: { key?: CryptoKey | null } }).room?.key || null;
+    if (!key) return null;
+    const data = decodeBase64(payload);
+    const decoder = decoding.createDecoder(data);
+    const algorithm = decoding.readVarString(decoder);
+    if (algorithm !== 'AES-GCM') throw new Error(`Unsupported algorithm: ${algorithm}`);
+    const iv = decoding.readVarUint8Array(decoder);
+    const cipher = decoding.readVarUint8Array(decoder);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher);
+    return decoding.readAny(decoding.createDecoder(new Uint8Array(decrypted)));
+  };
+
+  const sanitizeSignalMessage = (message: unknown) => {
+    if (!message || typeof message !== 'object') return message;
+    const msg = message as { type?: string; data?: unknown };
+    if (msg.type === 'publish' && typeof msg.data === 'string') {
+      return { ...msg, data: '[encrypted]' };
+    }
+    return message;
+  };
+
+  const logDecrypted = (direction: 'send' | 'recv', url: string, message: unknown) => {
+    if (!message || typeof message !== 'object') return;
+    const msg = message as { type?: string; data?: unknown; from?: string; to?: string };
+    if (msg.type !== 'publish' || typeof msg.data !== 'string') return;
+    decryptSignalPayload(msg.data)
+      .then((decrypted) => {
+        if (decrypted == null) return;
+        opts.onLog?.(`signal:${direction}_decrypted`, {
+          url,
+          from: msg.from,
+          to: msg.to,
+          decrypted
+        });
+      })
+      .catch((error) => {
+        opts.onLog?.(
+          `signal:${direction}_decrypt_failed`,
+          { url, error: errToObj(error) },
+          'WARN'
+        );
+      });
+  };
+
   const computeHasPeer = () => provider.awareness.getStates().size > 1;
   const updateHasPeer = (reason: string) => {
     const nowHasPeer = computeHasPeer();
@@ -204,7 +260,8 @@ export async function connectProvider(opts: {
     });
     conn.on('message', (message: unknown) => {
       updateStatus();
-      opts.onLog?.('signal:recv', { url: conn.url, message });
+      opts.onLog?.('signal:recv', { url: conn.url, message: sanitizeSignalMessage(message) });
+      logDecrypted('recv', conn.url, message);
       if (message && typeof message === 'object') {
         const msg = message as { type?: string; from?: string; peers?: unknown };
         if (typeof msg.from === 'string' && msg.from) {
@@ -220,10 +277,11 @@ export async function connectProvider(opts: {
       const doSend = () => {
         opts.onLog?.('signal:send', {
           url: conn.url,
-          message,
+          message: sanitizeSignalMessage(message),
           throttled: throttleActive,
           intervalMs: currentInterval()
         });
+        logDecrypted('send', conn.url, message);
         originalSend(message);
       };
       scheduleSend(doSend);
