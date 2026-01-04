@@ -1,9 +1,10 @@
 <template>
-  <div>
+  <div ref="rootRef">
     <div class="row">
       <div class="grow">
         <input
           id="titleInput"
+          ref="inputRef"
           v-model="title"
           type="text"
           placeholder="e.g., Drink water / Meds / Stretch / Call dentist..."
@@ -44,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import SuggestionsList from './SuggestionsList.vue';
 import type { TaskType, TemplateStat } from '../lib/types';
 import { useDaylistStore } from '../stores/daylist';
@@ -56,8 +57,23 @@ const store = useDaylistStore();
 const title = ref('');
 const type = ref<TaskType>('scheduled');
 const dueInput = ref('');
+const rootRef = ref<HTMLElement | null>(null);
+const inputRef = ref<HTMLInputElement | null>(null);
 
 const suggestions = computed(() => store.buildSuggestions(title.value.trim()));
+
+const ensureInputVisible = () => {
+  const input = inputRef.value;
+  if (!input) return;
+  if (document.activeElement !== input) return;
+  requestAnimationFrame(() => {
+    try {
+      input.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    } catch {
+      // ignore
+    }
+  });
+};
 
 const ensureDefaultDue = () => {
   if (type.value !== 'scheduled') return;
@@ -101,6 +117,14 @@ const applySuggestion = (item: TemplateStat) => {
 watch(type, () => {
   ensureDefaultDue();
 });
+
+watch(
+  () => suggestions.value.length,
+  async () => {
+    await nextTick();
+    ensureInputVisible();
+  }
+);
 
 onMounted(() => {
   ensureDefaultDue();
