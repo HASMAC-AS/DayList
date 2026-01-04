@@ -59,6 +59,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const usingTurn = ref(false);
   const signaling = ref<string[]>(DEFAULT_SIGNALING);
   const signalingStatus = reactive<Record<string, SignalingStatus>>({});
+  const signalingLastMessageAt = ref(0);
   const webrtcPeers = ref<string[]>([]);
   const bcPeers = ref<string[]>([]);
   const pendingTaskIds = ref<string[]>([]);
@@ -73,6 +74,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   let stopVersionPoll: (() => void) | null = null;
   let resumeTimer: number | null = null;
   let lastResumeAt = 0;
+  let watchdogTimer: number | null = null;
   let turnUpgradeStartAt = 0;
 
   const logEntries = ref<
@@ -327,6 +329,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     const sig = sigList.length ? sigList : DEFAULT_SIGNALING;
     signaling.value = sig;
     signalingPeerSeenAt.value = 0;
+    signalingLastMessageAt.value = 0;
 
     const connectWithIce = async (iceServers: RTCIceServer[], context: string) => {
       const hasTurn = iceServers.some((server) => {
@@ -367,6 +370,9 @@ export const useDaylistStore = defineStore('daylist', () => {
         },
         onSignalingStatus: (status) => {
           signalingStatus[status.url] = status;
+          if (status.lastMessageReceived) {
+            signalingLastMessageAt.value = Math.max(signalingLastMessageAt.value, status.lastMessageReceived);
+          }
         },
       onPeers: (peers) => {
         webrtcPeers.value = peers.webrtcPeers;
@@ -881,6 +887,20 @@ export const useDaylistStore = defineStore('daylist', () => {
     window.addEventListener('pageshow', (event) => {
       if ((event as PageTransitionEvent).persisted) resumeSync('pageshow:bfcache');
     });
+
+    if (watchdogTimer != null) window.clearInterval(watchdogTimer);
+    watchdogTimer = window.setInterval(() => {
+      if (document.hidden) return;
+      const now = Date.now();
+      const lastSignal = signalingLastMessageAt.value || 0;
+      const staleSignal = lastSignal > 0 && now - lastSignal > 25_000;
+      const neverSignaled = lastSignal === 0 && initialized.value;
+      if (staleSignal) {
+        resumeSync('watchdog:stale_signal');
+      } else if (!providerConnected.value && (staleSignal || neverSignaled)) {
+        resumeSync('watchdog:disconnected');
+      }
+    }, 15_000);
 
     try {
       if (navigator.storage?.estimate) {
