@@ -274,6 +274,9 @@ export const useDaylistStore = defineStore('daylist', () => {
     }
   };
 
+  const hasSignalingConnection = () =>
+    Object.values(signalingStatus).some((status) => status && status.connected);
+
   const resumeSync = (reason: string) => {
     if (!initialized.value) return;
     const now = Date.now();
@@ -284,7 +287,25 @@ export const useDaylistStore = defineStore('daylist', () => {
       resumeTimer = null;
     }
     resumeTimer = window.setTimeout(() => {
-      logEvent('sync:resume_reconnect', { reason });
+      const age = signalingLastMessageAt.value ? now - signalingLastMessageAt.value : Infinity;
+      const signalOk = hasSignalingConnection();
+      if (providerConnected.value && signalOk && age < 15000) {
+        logEvent('sync:resume_skip', { reason, ageMs: age, connected: providerConnected.value });
+        return;
+      }
+
+      if (provider.value && providerConnected.value && signalOk) {
+        logEvent('sync:resume_soft', { reason, ageMs: age });
+        try {
+          provider.value.disconnect();
+          provider.value.connect();
+          return;
+        } catch (error) {
+          logEvent('sync:resume_soft_failed', { reason, error: errToObj(error) }, 'WARN');
+        }
+      }
+
+      logEvent('sync:resume_reconnect', { reason, ageMs: age });
       connectSync();
     }, 200);
   };
