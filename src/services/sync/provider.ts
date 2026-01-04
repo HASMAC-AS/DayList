@@ -27,7 +27,7 @@ export async function connectProvider(opts: {
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
 }): Promise<WebrtcProvider> {
   const SIGNAL_THROTTLE_DELAY_MS = 1000;
-  const SIGNAL_THROTTLE_INTERVAL_MS = 1000;
+  const SIGNAL_THROTTLE_INTERVAL_MS = 5000;
 
   const sendQueue: Array<() => void> = [];
   let sendTimer: ReturnType<typeof setTimeout> | null = null;
