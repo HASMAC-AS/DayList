@@ -100,21 +100,17 @@ describe('signaling throttling', () => {
     expect(conn.sendCalls.length).toBe(3);
 
     await vi.advanceTimersByTimeAsync(900);
-    expect(conn.sendCalls.length).toBe(3);
-
-    await vi.advanceTimersByTimeAsync(100);
     expect(conn.sendCalls.length).toBe(4);
   });
 
-  it('throttles to 1 per 30s after a peer is connected', async () => {
+  it('throttles to 1 per 30s after a peer is discovered', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
     const provider = await buildProvider();
     const conn = provider.signalingConns[0];
 
-    provider.awareness.states.set('remote', {});
-    provider.awareness.emit('change');
+    conn.emit('message', [{ type: 'subscribe', from: 'peer-a' }]);
 
     conn.send({ n: 1 });
     conn.send({ n: 2 });
@@ -134,9 +130,6 @@ describe('signaling throttling', () => {
 
     const provider = await buildProvider();
     const conn = provider.signalingConns[0];
-
-    provider.awareness.states.set('remote', {});
-    provider.awareness.emit('change');
 
     vi.setSystemTime(5 * 60 * 1000 + 1);
     conn.emit('message', [{ type: 'subscribe', from: 'peer-a' }]);

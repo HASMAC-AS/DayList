@@ -1,5 +1,9 @@
 import { SignalingConn, WebrtcConn, WebrtcProvider } from 'y-webrtc';
 import * as decoding from 'lib0/decoding';
+import * as encoding from 'lib0/encoding';
+import * as awarenessProtocol from 'y-protocols/awareness';
+import * as syncProtocol from 'y-protocols/sync';
+import * as Y from 'yjs';
 import { errToObj } from '../../lib/core';
 import type { YDocHandles } from './ydoc';
 
@@ -37,24 +41,34 @@ export async function connectProvider(opts: {
   const PEER_STALE_MS = 30_000;
   const PEER_URGENT_MS = 5 * 60 * 1000;
   const URGENT_BURST_COUNT = 3;
+  const MESSAGE_SYNC = 0;
+  const MESSAGE_AWARENESS = 1;
+  const MESSAGE_QUERY_AWARENESS = 3;
 
   const sendQueue: Array<() => void> = [];
   let sendTimer: ReturnType<typeof setTimeout> | null = null;
   let burstRemaining = 0;
   let startupBurstUsed = false;
   let peerConnected = false;
+  let peerDiscovered = false;
   let priorityRemaining = 0;
   let peerSeen = false;
   let peerSeenAt = 0;
   const peerLastSeen = new Map<string, number>();
   const pendingPeers = new Set<string>();
+  const urgentPeers = new Set<string>();
+  const startupResynced = new Set<string>();
+  const resyncPending = new Map<string, { reason: string; attempts: number }>();
+  const knownPeers = new Set<string>();
   let staleInterval: ReturnType<typeof setInterval> | null = null;
 
   const STALE_CHECK_INTERVAL_MS = 5_000;
+  const RESYNC_RETRY_MS = 500;
+  const RESYNC_MAX_ATTEMPTS = 12;
 
   const currentInterval = () => {
     if (burstRemaining > 0) return STARTUP_BURST_INTERVAL_MS;
-    return peerConnected ? POST_PEER_INTERVAL_MS : PRE_PEER_INTERVAL_MS;
+    return peerDiscovered ? POST_PEER_INTERVAL_MS : PRE_PEER_INTERVAL_MS;
   };
 
   const startPump = () => {
@@ -183,6 +197,7 @@ export async function connectProvider(opts: {
     if (isNew || stale) {
       if (urgent) {
         grantPriorityBurst(isNew ? 'new_peer' : 'stale_peer');
+        urgentPeers.add(peerId);
       }
       ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
     }
@@ -240,22 +255,92 @@ export async function connectProvider(opts: {
     });
   };
 
+  const sendResync = (peerId: string, reason: string) => {
+    const room = getRoom();
+    if (!room) return false;
+    const conn = room.webrtcConns?.get(peerId);
+    if (!conn || !conn.peer) return false;
+    if (!conn.peer.connected) return false;
+
+    try {
+      const doc = room.provider.doc;
+      const awareness = room.awareness;
+
+      const update = Y.encodeStateAsUpdate(doc);
+      const encUpdate = encoding.createEncoder();
+      encoding.writeVarUint(encUpdate, MESSAGE_SYNC);
+      syncProtocol.writeUpdate(encUpdate, update);
+      conn.peer.send(encoding.toUint8Array(encUpdate));
+
+      const encStep1 = encoding.createEncoder();
+      encoding.writeVarUint(encStep1, MESSAGE_SYNC);
+      syncProtocol.writeSyncStep1(encStep1, doc);
+      conn.peer.send(encoding.toUint8Array(encStep1));
+
+      const encAwQuery = encoding.createEncoder();
+      encoding.writeVarUint(encAwQuery, MESSAGE_QUERY_AWARENESS);
+      conn.peer.send(encoding.toUint8Array(encAwQuery));
+
+      const awarenessStates = awareness.getStates();
+      if (awarenessStates.size > 0) {
+        const encAw = encoding.createEncoder();
+        encoding.writeVarUint(encAw, MESSAGE_AWARENESS);
+        encoding.writeVarUint8Array(
+          encAw,
+          awarenessProtocol.encodeAwarenessUpdate(awareness, Array.from(awarenessStates.keys()))
+        );
+        conn.peer.send(encoding.toUint8Array(encAw));
+      }
+
+      opts.onLog?.('webrtc:resync', { peerId, reason });
+      return true;
+    } catch (error) {
+      opts.onLog?.('webrtc:resync_failed', { peerId, reason, error: errToObj(error) }, 'WARN');
+      return true;
+    }
+  };
+
+  const attemptResync = (peerId: string) => {
+    const entry = resyncPending.get(peerId);
+    if (!entry) return;
+    if (sendResync(peerId, entry.reason)) {
+      resyncPending.delete(peerId);
+      return;
+    }
+    if (entry.attempts >= RESYNC_MAX_ATTEMPTS) {
+      resyncPending.delete(peerId);
+      opts.onLog?.('webrtc:resync_giveup', { peerId, reason: entry.reason }, 'WARN');
+      return;
+    }
+    entry.attempts += 1;
+    setTimeout(() => attemptResync(peerId), RESYNC_RETRY_MS);
+  };
+
+  const requestResync = (peerId: string, reason: string) => {
+    if (!peerId) return;
+    resyncPending.set(peerId, { reason, attempts: 0 });
+    attemptResync(peerId);
+  };
+
   const computeHasPeer = () => provider.awareness.getStates().size > 1;
   const updateHasPeer = (reason: string) => {
     const nowHasPeer = computeHasPeer();
     if (nowHasPeer) {
       if (!peerConnected) {
         peerConnected = true;
-        opts.onLog?.('signal:peer_connected', { reason, intervalMs: currentInterval() });
-        resetSendTimer();
-        opts.onLog?.('signal:peer_detected', { reason });
+        opts.onLog?.('signal:peer_connected', { reason });
       }
+      if (!peerDiscovered) {
+        peerDiscovered = true;
+        opts.onLog?.('signal:peer_discovered', { reason, intervalMs: currentInterval() });
+        resetSendTimer();
+      }
+      opts.onLog?.('signal:peer_detected', { reason });
       return;
     }
     if (peerConnected) {
       peerConnected = false;
-      opts.onLog?.('signal:peer_lost', { reason, intervalMs: currentInterval() });
-      resetSendTimer();
+      opts.onLog?.('signal:peer_lost', { reason });
     }
   };
 
@@ -263,6 +348,11 @@ export async function connectProvider(opts: {
     if (peerSeen) return;
     peerSeen = true;
     peerSeenAt = Date.now();
+    if (!peerDiscovered) {
+      peerDiscovered = true;
+      opts.onLog?.('signal:peer_discovered', { reason, intervalMs: currentInterval() });
+      resetSendTimer();
+    }
     opts.onLog?.('signal:peer_seen', { reason, detail, at: peerSeenAt });
   };
 
@@ -321,6 +411,28 @@ export async function connectProvider(opts: {
       bcPeers: event.bcPeers || []
     });
     opts.onLog?.('provider:peers', event);
+    const webrtcList = Array.isArray(event.webrtcPeers) ? event.webrtcPeers : [];
+    const added = Array.isArray(event.added)
+      ? event.added
+      : webrtcList.filter((peerId) => !knownPeers.has(peerId));
+    added.forEach((peerId) => {
+      if (!peerId || typeof peerId !== 'string') return;
+      const reasons: string[] = [];
+      if (!startupResynced.has(peerId)) {
+        startupResynced.add(peerId);
+        reasons.push('startup');
+      }
+      if (urgentPeers.has(peerId)) {
+        urgentPeers.delete(peerId);
+        reasons.push('stale_peer');
+      }
+      if (reasons.length) requestResync(peerId, reasons.join('+'));
+    });
+
+    knownPeers.clear();
+    webrtcList.forEach((peerId) => {
+      if (peerId && typeof peerId === 'string') knownPeers.add(peerId);
+    });
   });
 
   const attachConn = (conn: SignalingConn) => {
