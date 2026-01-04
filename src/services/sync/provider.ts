@@ -168,6 +168,7 @@ export async function connectProvider(opts: {
   const shouldBypassThrottle = (message: unknown) => {
     if (!message || typeof message !== 'object') return false;
     const msg = message as { type?: string; data?: unknown; topic?: string };
+    if (msg.type && msg.type !== 'publish') return true;
     if (msg.type !== 'publish') return false;
     if (msg.topic !== opts.room) return false;
     if (msg.data && typeof msg.data === 'object') {
@@ -211,13 +212,20 @@ export async function connectProvider(opts: {
     const urgent = last == null || now - (last || 0) > PEER_URGENT_MS;
     const isNew = last == null;
     peerLastSeen.set(peerId, now);
+    const detailType =
+      detail && typeof detail === 'object' && 'type' in (detail as Record<string, unknown>)
+        ? String((detail as Record<string, unknown>).type || '')
+        : '';
+    const isSignal = detailType === 'signal' || reason.includes('signal');
 
     if (isNew || stale) {
       if (urgent) {
         grantPriorityBurst(isNew ? 'new_peer' : 'stale_peer');
         urgentPeers.add(peerId);
       }
-      ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
+      if (!isSignal) {
+        ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
+      }
     }
   };
 

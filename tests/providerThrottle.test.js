@@ -83,10 +83,10 @@ describe('signaling throttling', () => {
 
     conn.emit('connect');
 
-    conn.send({ n: 1 });
-    conn.send({ n: 2 });
-    conn.send({ n: 3 });
-    conn.send({ n: 4 });
+    conn.send({ type: 'publish', topic: 'room', data: 'a' });
+    conn.send({ type: 'publish', topic: 'room', data: 'b' });
+    conn.send({ type: 'publish', topic: 'room', data: 'c' });
+    conn.send({ type: 'publish', topic: 'room', data: 'd' });
 
     expect(conn.sendCalls.length).toBe(1);
 
@@ -112,8 +112,8 @@ describe('signaling throttling', () => {
 
     conn.emit('message', [{ type: 'subscribe', from: 'peer-a', topics: ['room'] }]);
 
-    conn.send({ n: 1 });
-    conn.send({ n: 2 });
+    conn.send({ type: 'publish', topic: 'room', data: 'a' });
+    conn.send({ type: 'publish', topic: 'room', data: 'b' });
 
     expect(conn.sendCalls.length).toBe(1);
 
@@ -134,8 +134,8 @@ describe('signaling throttling', () => {
     vi.setSystemTime(5 * 60 * 1000 + 1);
     conn.emit('message', [{ type: 'subscribe', from: 'peer-a', topics: ['room'] }]);
 
-    conn.send({ n: 1 });
-    conn.send({ n: 2 });
+    conn.send({ type: 'publish', topic: 'room', data: 'a' });
+    conn.send({ type: 'publish', topic: 'room', data: 'b' });
 
     expect(conn.sendCalls.length).toBe(2);
   });
