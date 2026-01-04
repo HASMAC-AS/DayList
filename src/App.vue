@@ -14,7 +14,7 @@
     </transition>
 
     <div v-if="view !== 'main'" class="footer">
-      Offline-first PWA: once loaded at least once, it keeps working without internet. Install from your browser menu.
+      ~
     </div>
   </div>
 
