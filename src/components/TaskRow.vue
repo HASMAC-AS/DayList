@@ -5,6 +5,8 @@
     @touchstart="onTouchStart"
     @touchmove="onTouchMove"
     @touchend="onTouchEnd"
+    @mousemove="onMouseMove"
+    @mouseleave="onMouseLeave"
   >
     <div class="task-actions">
       <button
@@ -22,8 +24,6 @@
       :data-id="task.id"
       :style="{ transform: `translateX(${offsetX}px)` }"
       @click="onClickTask"
-      @mousemove="onMouseMove"
-      @mouseleave="onMouseLeave"
     >
       <label class="check">
         <input
