@@ -100,6 +100,133 @@ function parseSignalingList(s) {
     .filter(Boolean);
 }
 
+/* --------------------------- Debug + Logging --------------------------- */
+const DEBUG_Q = 'debug';
+const DEBUG_LS = 'daylist.debug.enabled.v1';
+const DEBUG_LOG_LS = 'daylist.debug.log.v1';
+const DEBUG_LOG_MAX = 500;
+
+function isDebugEnabled() {
+  try {
+    const url = new URL(window.location.href);
+    const q = (url.searchParams.get(DEBUG_Q) || '').trim();
+    if (q === '1' || q === 'true') return true;
+    return localStorage.getItem(DEBUG_LS) === '1';
+  } catch {
+    return false;
+  }
+}
+const DEBUG = isDebugEnabled();
+
+function tsIso(t = Date.now()) {
+  return new Date(t).toISOString();
+}
+
+function safeJson(x) {
+  try { return JSON.parse(JSON.stringify(x)); } catch { return String(x); }
+}
+
+function loadDebugLog() {
+  try {
+    const raw = localStorage.getItem(DEBUG_LOG_LS);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDebugLog(arr) {
+  try {
+    localStorage.setItem(DEBUG_LOG_LS, JSON.stringify(arr.slice(-DEBUG_LOG_MAX)));
+  } catch {
+    // ignore quota failures
+  }
+}
+
+let __debugLog = loadDebugLog();
+
+function log(level, msg, data) {
+  const entry = { t: Date.now(), iso: tsIso(), level, msg, data: data == null ? null : safeJson(data) };
+  __debugLog.push(entry);
+  if (__debugLog.length > DEBUG_LOG_MAX) __debugLog = __debugLog.slice(-DEBUG_LOG_MAX);
+  saveDebugLog(__debugLog);
+
+  const prefix = `[DayList ${entry.iso}]`;
+  // Always log warnings/errors; debug/info only if DEBUG enabled
+  if (level === 'error') console.error(prefix, msg, data ?? '');
+  else if (level === 'warn') console.warn(prefix, msg, data ?? '');
+  else if (DEBUG) console.log(prefix, msg, data ?? '');
+}
+
+window.daylistDebug = {
+  enabled: DEBUG,
+  enable() { try { localStorage.setItem(DEBUG_LS, '1'); } catch {} log('info', 'Debug enabled (reload to apply)'); },
+  disable() { try { localStorage.removeItem(DEBUG_LS); } catch {} log('info', 'Debug disabled (reload to apply)'); },
+  dumpLog() { return loadDebugLog(); },
+  clearLog() { try { localStorage.removeItem(DEBUG_LOG_LS); } catch {} },
+};
+
+async function storageDiagnostics() {
+  log('info', 'Storage diagnostics: start', {
+    href: window.location.href,
+    origin: window.location.origin,
+    ua: navigator.userAgent,
+    standalone: window.matchMedia?.('(display-mode: standalone)')?.matches ?? null
+  });
+
+  // localStorage sanity
+  try {
+    const k = '__daylist_ls_test__';
+    localStorage.setItem(k, String(Date.now()));
+    localStorage.removeItem(k);
+    log('info', 'localStorage: OK');
+  } catch (e) {
+    log('error', 'localStorage: FAILED', { e: String(e) });
+  }
+
+  // IndexedDB sanity
+  try {
+    await new Promise((resolve, reject) => {
+      const req = indexedDB.open('__daylist_idb_test__', 1);
+      req.onupgradeneeded = () => { /* noop */ };
+      req.onsuccess = () => { req.result.close(); resolve(); };
+      req.onerror = () => reject(req.error || new Error('IDB open failed'));
+    });
+    indexedDB.deleteDatabase('__daylist_idb_test__');
+    log('info', 'indexedDB: OK');
+  } catch (e) {
+    log('error', 'indexedDB: FAILED', { e: String(e) });
+  }
+
+  // Storage persistence (prevents browser eviction)
+  try {
+    if (navigator.storage?.persisted && navigator.storage?.persist) {
+      const persisted = await navigator.storage.persisted();
+      log('info', 'storage.persisted()', { persisted });
+      if (!persisted) {
+        const granted = await navigator.storage.persist();
+        log('info', 'storage.persist() requested', { granted });
+      }
+    }
+  } catch (e) {
+    log('warn', 'storage.persist() check failed', { e: String(e) });
+  }
+
+  // Quota estimate
+  try {
+    if (navigator.storage?.estimate) {
+      const est = await navigator.storage.estimate();
+      log('info', 'storage.estimate()', est);
+    }
+  } catch (e) {
+    log('warn', 'storage.estimate() failed', { e: String(e) });
+  }
+
+  log('info', 'Storage diagnostics: end');
+}
+
 /* ----------------------------- PWA wiring ----------------------------- */
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -277,6 +404,9 @@ async function getIceServers(turnKey) {
 /* ------------------------------ Yjs setup ------------------------------ */
 const ydoc = new Y.Doc();
 const persistence = new IndexeddbPersistence('daylist-v1', ydoc);
+persistence.on('synced', () => {
+  log('info', 'IndexedDB persistence: synced', { counts: docCounts() });
+});
 
 // Shared structures
 const yTasks = ydoc.getMap('tasks');          // id -> Y.Map
@@ -319,17 +449,108 @@ const els = {
 };
 
 /* ------------------------------ Persistence --------------------------- */
-function writeSnapshot() {
-  try {
-    const snapshot = exportSnapshot({ historyDays: 120 });
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot));
-  } catch {}
+let hydrationComplete = false;  // guard to avoid persisting "empty boot" state
+let lastSnapshotMeta = null;
+
+function snapshotMeta(snapshot) {
+  const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks.length : 0;
+  const templates = snapshot?.templates && typeof snapshot.templates === 'object'
+    ? Object.keys(snapshot.templates).length
+    : 0;
+  const historyDays = snapshot?.history && typeof snapshot.history === 'object'
+    ? Object.keys(snapshot.history).length
+    : 0;
+  return { v: snapshot?.v ?? null, exportedAt: snapshot?.exportedAt ?? null, tasks, templates, historyDays };
 }
 
-const saveSnapshot = debounce(writeSnapshot, 800);
+function docCounts() {
+  let tasks = 0, templates = 0, historyDays = 0;
+  try { tasks = yTasks.size; } catch {}
+  try { templates = yTemplates.size; } catch {}
+  try { historyDays = yHistory.size; } catch {}
+  return { tasks, templates, historyDays };
+}
 
-window.addEventListener('pagehide', () => {
-  writeSnapshot();
+function writeSnapshot(reason = 'unknown') {
+  try {
+    const before = docCounts();
+    const t0 = performance.now();
+    const snapshot = exportSnapshot({ historyDays: 120 });
+    const meta = snapshotMeta(snapshot);
+    const json = JSON.stringify(snapshot);
+    localStorage.setItem(SNAPSHOT_KEY, json);
+    lastSnapshotMeta = meta;
+
+    const t1 = performance.now();
+    log('info', 'Snapshot written', {
+      reason,
+      bytes: json.length,
+      meta,
+      docBefore: before,
+      tookMs: Math.round((t1 - t0) * 10) / 10
+    });
+  } catch (e) {
+    log('error', 'Snapshot write FAILED', { reason, e: String(e) });
+  }
+}
+
+const saveSnapshot = debounce((reason) => writeSnapshot(reason), 600);
+
+function persistNow(reason) {
+  // synchronous, immediate
+  writeSnapshot(reason);
+}
+
+function readSnapshotRaw() {
+  try {
+    return localStorage.getItem(SNAPSHOT_KEY);
+  } catch (e) {
+    log('error', 'Snapshot read FAILED (localStorage)', { e: String(e) });
+    return null;
+  }
+}
+
+function parseSnapshot(raw) {
+  try {
+    const obj = JSON.parse(raw);
+    return obj;
+  } catch (e) {
+    log('error', 'Snapshot JSON parse FAILED', { e: String(e), sample: String(raw).slice(0, 120) });
+    return null;
+  }
+}
+
+async function bootstrapFromLocalStorage(tag = 'bootstrap') {
+  const raw = readSnapshotRaw();
+  if (!raw) {
+    log('info', 'No snapshot found in localStorage', { tag });
+    return { loaded: false, imported: false, meta: null };
+  }
+
+  log('info', 'Snapshot found in localStorage', { tag, bytes: raw.length });
+
+  const snap = parseSnapshot(raw);
+  if (!snap) return { loaded: true, imported: false, meta: null };
+
+  const meta = snapshotMeta(snap);
+  lastSnapshotMeta = meta;
+  log('info', 'Snapshot meta', { tag, meta, docBefore: docCounts() });
+
+  try {
+    importSnapshot(snap);
+    log('info', 'Snapshot imported (merge-only)', { tag, docAfter: docCounts() });
+    return { loaded: true, imported: true, meta };
+  } catch (e) {
+    log('error', 'Snapshot import FAILED', { tag, e: String(e) });
+    return { loaded: true, imported: false, meta };
+  }
+}
+
+// Flush points: refresh, tab hidden, iOS quirks, etc.
+window.addEventListener('pagehide', () => persistNow('pagehide'));
+window.addEventListener('beforeunload', () => persistNow('beforeunload'));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') persistNow('visibility.hidden');
 });
 
 function exportSnapshot({ historyDays = 120 } = {}) {
@@ -442,12 +663,7 @@ function importSnapshot(snapshot) {
       }
     }
   });
-}
-
-async function bootstrapFromLocalStorage() {
-  const raw = localStorage.getItem(SNAPSHOT_KEY);
-  if (!raw) return;
-  try { importSnapshot(JSON.parse(raw)); } catch {}
+  persistNow('importSnapshot');
 }
 
 /* ---------------------------- Sync connect ---------------------------- */
@@ -599,6 +815,7 @@ function addTaskFromUI() {
     ytask.set('templateKey', touchTemplate(title, type, dueAt));
     yTasks.set(id, ytask);
   });
+  persistNow('addTaskFromUI');
 
   els.titleInput.value = '';
   els.titleInput.focus();
@@ -626,6 +843,7 @@ function toggleCompletion(id, checked) {
       if (type === 'scheduled') ytask.set('doneAt', null);
     }
   });
+  persistNow('toggleCompletion');
 }
 
 function archiveTask(id) {
@@ -634,6 +852,7 @@ function archiveTask(id) {
     if (!ytask) return;
     ytask.set('archivedAt', Date.now());
   });
+  persistNow('archiveTask');
 }
 
 function renameTask(id, newTitle) {
@@ -648,6 +867,7 @@ function renameTask(id, newTitle) {
     const dueAt = ytask.get('dueAt') == null ? null : Number(ytask.get('dueAt'));
     ytask.set('templateKey', touchTemplate(title, type, dueAt));
   });
+  persistNow('renameTask');
 }
 
 function setTaskActive(id, active) {
@@ -656,6 +876,7 @@ function setTaskActive(id, active) {
     if (!ytask) return;
     ytask.set('active', !!active);
   });
+  persistNow('setTaskActive');
 }
 
 /* ------------------------- Suggestion ranking -------------------------- */
@@ -1004,6 +1225,7 @@ els.wipeBtn.addEventListener('click', async () => {
     localStorage.removeItem(LS_METERED_ICE_CACHE);
     await persistence.clearData();
     ydoc.transact(() => { yTasks.clear(); yTemplates.clear(); yHistory.clear(); });
+    persistNow('wipe');
     toast('Wiped');
   } catch { toast('Wipe failed'); }
 });
@@ -1025,10 +1247,26 @@ function setDefaultsAndHydrateInputs() {
   els.dayLabel.textContent = `Day: ${logicalDayKey()} (resets 03:00 local)`;
 }
 
-ydoc.on('update', () => {
+ydoc.on('update', (update, origin) => {
+  const bytes = update?.byteLength ?? null;
+  const originName =
+    origin == null ? 'null' :
+    (typeof origin === 'string' ? origin :
+     origin.constructor?.name || typeof origin);
+
+  log('info', 'Y.Doc update', {
+    bytes,
+    origin: originName,
+    counts: docCounts(),
+    hydrationComplete
+  });
+
   rebuildTemplateIndex();
   scheduleRender();
-  saveSnapshot();
+
+  // Prevent the classic foot-gun: persisting an "empty boot doc" before we hydrate.
+  if (hydrationComplete) saveSnapshot('ydoc.update');
+  else log('info', 'Skip snapshot save (hydration not complete yet)', { bytes, origin: originName });
 });
 
 setInterval(() => scheduleRender(), 30 * 1000);
@@ -1036,11 +1274,38 @@ setInterval(() => scheduleRender(), 30 * 1000);
 (async function main() {
   setDefaultsAndHydrateInputs();
 
-  await persistence.whenSynced;
-  await bootstrapFromLocalStorage();
+  // Loud startup logs so you can diagnose "why did it forget?"
+  await storageDiagnostics();
+
+  log('info', 'BOOT: start', { counts: docCounts() });
+
+  // 1) Restore ASAP from localStorage snapshot so refresh never shows empty if we have a backup.
+  await bootstrapFromLocalStorage('boot.pre-idb');
+
+  // 2) Wait for IndexedDB (Yjs) to load, but DO NOT hang forever if IDB is blocked.
+  try {
+    const IDB_TIMEOUT_MS = 4000;
+    const timed = await Promise.race([
+      persistence.whenSynced.then(() => 'synced'),
+      new Promise((r) => setTimeout(() => r('timeout'), IDB_TIMEOUT_MS))
+    ]);
+    log('info', 'IndexedDB persistence.whenSynced result', { timed, counts: docCounts() });
+  } catch (e) {
+    log('error', 'IndexedDB persistence.whenSynced FAILED', { e: String(e) });
+  }
+
+  // 3) Re-apply snapshot after IDB too (merge-only, idempotent). Helps if IDB is empty/blocked.
+  await bootstrapFromLocalStorage('boot.post-idb');
+
+  // From here on, updates are “real” and safe to persist.
+  hydrationComplete = true;
+  persistNow('boot.finalize');
 
   rebuildTemplateIndex();
+
   await connectSync();
   render();
+
+  log('info', 'BOOT: ready', { counts: docCounts(), lastSnapshotMeta });
   toast('Ready');
 })();
