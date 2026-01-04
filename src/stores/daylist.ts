@@ -299,6 +299,14 @@ export const useDaylistStore = defineStore('daylist', () => {
       connectSync();
       return;
     }
+    if (webrtcPeers.value.length > 0 || bcPeers.value.length > 0) {
+      logEvent('sync:kick_skip_pending_peers', {
+        reason,
+        webrtcPeers: webrtcPeers.value.length,
+        bcPeers: bcPeers.value.length
+      });
+      return;
+    }
     if (peerCount.value > 0) return;
     logEvent('sync:kick_signaling', { reason });
     try {
@@ -328,6 +336,14 @@ export const useDaylistStore = defineStore('daylist', () => {
       }
 
       if (peerCount.value === 0) {
+        if (webrtcPeers.value.length > 0 || bcPeers.value.length > 0) {
+          logEvent('sync:resume_waiting_peers', {
+            reason,
+            webrtcPeers: webrtcPeers.value.length,
+            bcPeers: bcPeers.value.length
+          });
+          return;
+        }
         kickSignaling(`resume:${reason}`);
         return;
       }
@@ -927,6 +943,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     keys.enc = resolved.enc;
     keys.sig = resolved.sig;
     keys.turnKey = resolved.turnKey;
+    keys.turnEnabled = resolved.turnEnabled;
 
     rebuildDerivedState();
 
@@ -982,7 +999,12 @@ export const useDaylistStore = defineStore('daylist', () => {
         else resumeSync('watchdog:stale_signal');
       } else if (!providerConnected.value && (staleSignal || neverSignaled)) {
         resumeSync('watchdog:disconnected');
-      } else if (peerCount.value === 0 && recentLocalChange) {
+      } else if (
+        peerCount.value === 0 &&
+        recentLocalChange &&
+        webrtcPeers.value.length === 0 &&
+        bcPeers.value.length === 0
+      ) {
         kickSignaling('watchdog:local_change');
       }
     }, 15_000);
