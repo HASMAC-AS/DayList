@@ -46,7 +46,8 @@ export const useDaylistStore = defineStore('daylist', () => {
     room: '',
     enc: '',
     sig: '',
-    turnKey: ''
+    turnKey: '',
+    turnEnabled: true
   });
 
   const providerConnected = ref(false);
@@ -360,6 +361,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     const enc = (keys.enc || '').trim();
     const sigRaw = (keys.sig || '').trim();
     const turnKey = (keys.turnKey || '').trim();
+    const turnEnabled = keys.turnEnabled !== false;
 
     if (!room) {
       toast('Connect key cannot be empty');
@@ -370,8 +372,8 @@ export const useDaylistStore = defineStore('daylist', () => {
       return;
     }
 
-    persistKeysToStorage(localStorage, { room, enc, sig: sigRaw, turnKey });
-    writeKeysToUrl({ room, enc, sig: sigRaw, turnKey });
+    persistKeysToStorage(localStorage, { room, enc, sig: sigRaw, turnKey, turnEnabled });
+    writeKeysToUrl({ room, enc, sig: sigRaw, turnKey, turnEnabled });
 
     const sigList = parseSignalingList(sigRaw);
     const sig = sigList.length ? sigList : DEFAULT_SIGNALING;
@@ -453,7 +455,7 @@ export const useDaylistStore = defineStore('daylist', () => {
 
     await connectWithIce(stunOnlyIce, 'stun');
 
-    if (turnKey) {
+    if (turnKey && turnEnabled) {
       turnPrefetch = getIceServers({
         turnKey,
         allowTurn: true,
@@ -647,7 +649,8 @@ export const useDaylistStore = defineStore('daylist', () => {
         room: keys.room,
         enc: keys.enc,
         sig: keys.sig,
-        turnKey: keys.turnKey
+        turnKey: keys.turnKey,
+        turnEnabled: keys.turnEnabled
       }
     };
     return JSON.stringify(backup, null, 2);
@@ -661,17 +664,20 @@ export const useDaylistStore = defineStore('daylist', () => {
       keys.enc = nextKeys.enc || keys.enc;
       keys.sig = nextKeys.sig || keys.sig;
       keys.turnKey = nextKeys.turnKey || keys.turnKey;
+      if (typeof nextKeys.turnEnabled === 'boolean') keys.turnEnabled = nextKeys.turnEnabled;
       persistKeysToStorage(localStorage, {
         room: keys.room,
         enc: keys.enc,
         sig: keys.sig,
-        turnKey: keys.turnKey
+        turnKey: keys.turnKey,
+        turnEnabled: keys.turnEnabled
       });
       writeKeysToUrl({
         room: keys.room,
         enc: keys.enc,
         sig: keys.sig,
-        turnKey: keys.turnKey
+        turnKey: keys.turnKey,
+        turnEnabled: keys.turnEnabled
       });
     }
 

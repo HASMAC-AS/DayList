@@ -59,6 +59,7 @@ export interface SnapshotKeys {
   enc: string;
   sig: string;
   turnKey: string;
+  turnEnabled?: boolean;
 }
 
 export interface SnapshotV2 extends SnapshotV1 {

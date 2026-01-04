@@ -29,6 +29,10 @@
           </div>
           <input id="turnKeyInput" v-model="store.keys.turnKey" type="password" placeholder="optional but recommended" />
         </div>
+        <label class="checkbox">
+          <input id="turnEnabledInput" v-model="store.keys.turnEnabled" type="checkbox" />
+          Use TURN
+        </label>
       </div>
 
       <div class="row" style="align-items: flex-end; margin-top: 10px">
@@ -59,7 +63,7 @@
 
       <div class="hint" style="margin-top: 10px">
         WebRTC works across the internet; TURN usually makes it \"just work\" across strict NATs/corporate Wi-Fi.
-        Using TURN costs bandwidth - so that API key is basically a small money faucet.
+        Using TURN costs bandwidth - so that API key is basically a small money faucet. Toggle it off to test LAN-only.
       </div>
 
       <div class="spacer"></div>
@@ -95,7 +99,8 @@ const buildSettingsPayload = () => ({
   room: store.keys.room,
   enc: store.keys.enc,
   sig: store.keys.sig,
-  turnKey: store.keys.turnKey
+  turnKey: store.keys.turnKey,
+  turnEnabled: store.keys.turnEnabled
 });
 
 const settingsJson = computed(() => JSON.stringify(buildSettingsPayload(), null, 2));
@@ -139,11 +144,13 @@ const applySettingsJson = async () => {
       enc: string;
       sig: string;
       turnKey: string;
+      turnEnabled: boolean;
     }>;
     if (typeof next.room === 'string') store.keys.room = next.room;
     if (typeof next.enc === 'string') store.keys.enc = next.enc;
     if (typeof next.sig === 'string') store.keys.sig = next.sig;
     if (typeof next.turnKey === 'string') store.keys.turnKey = next.turnKey;
+    if (typeof next.turnEnabled === 'boolean') store.keys.turnEnabled = next.turnEnabled;
     await store.connectSync();
     toast('Settings applied');
   } catch {
