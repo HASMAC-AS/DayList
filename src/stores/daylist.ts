@@ -33,6 +33,7 @@ import {
 import { createYDoc, type YDocHandles } from '../services/sync/ydoc';
 import { persistKeysToStorage, resolveInitialKeys, type SyncKeys, writeKeysToUrl } from '../services/sync/keys';
 import { useToastBus } from '../services/toast';
+import { startVersionPolling } from '../services/versionCheck';
 
 const DEFAULT_SIGNALING = ['wss://daylist-signaling.onrender.com/ws', 'wss://signaling.yjs.dev'];
 const HISTORY_DAYS = 7;
@@ -69,6 +70,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const logger = shallowRef<DebugLogger | null>(null);
   const initialized = ref(false);
   let turnUpgradeTimer: number | null = null;
+  let stopVersionPoll: (() => void) | null = null;
   let turnUpgradeStartAt = 0;
 
   const logEntries = ref<
@@ -816,6 +818,19 @@ export const useDaylistStore = defineStore('daylist', () => {
     }, 30_000);
 
     toast('Ready');
+
+    if (stopVersionPoll) stopVersionPoll();
+    stopVersionPoll = startVersionPolling({
+      intervalMs: 10_000,
+      onUpdate: (info) => {
+        logEvent('version:update_available', info);
+        toast('Update available. Reload to fetch.');
+      },
+      onError: (error) => {
+        logEvent('version:check_failed', { error: errToObj(error) }, 'DEBUG');
+      },
+      log: logEvent
+    });
 
     try {
       if (navigator.storage?.estimate) {

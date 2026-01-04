@@ -2,15 +2,26 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
 
+const buildId = process.env.GITHUB_RUN_NUMBER || process.env.BUILD_NUMBER || `${Date.now()}`;
+const buildTime = new Date().toISOString();
+
 export default defineConfig({
   base: './',
   define: {
-    __BUILD_ID__: JSON.stringify(
-      process.env.GITHUB_RUN_NUMBER || process.env.BUILD_NUMBER || `${Date.now()}`
-    ),
-    __BUILD_TIME__: JSON.stringify(new Date().toISOString())
+    __BUILD_ID__: JSON.stringify(buildId),
+    __BUILD_TIME__: JSON.stringify(buildTime)
   },
   plugins: [
+    {
+      name: 'daylist-version-json',
+      generateBundle() {
+        this.emitFile({
+          type: 'asset',
+          fileName: 'version.json',
+          source: JSON.stringify({ buildId, buildTime }, null, 2)
+        });
+      }
+    },
     vue(),
     VitePWA({
       strategies: 'injectManifest',
