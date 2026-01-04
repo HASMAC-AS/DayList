@@ -118,6 +118,8 @@ export async function connectProvider(opts: {
   const provider = new WebrtcProvider(opts.room, opts.doc.ydoc, {
     password: opts.enc,
     signaling: opts.signaling,
+    maxConns: Number.POSITIVE_INFINITY,
+    filterBcConns: false,
     peerOpts: {
       config: { iceServers: opts.iceServers }
     }
