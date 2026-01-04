@@ -71,6 +71,8 @@ export const useDaylistStore = defineStore('daylist', () => {
   const initialized = ref(false);
   let turnUpgradeTimer: number | null = null;
   let stopVersionPoll: (() => void) | null = null;
+  let resumeTimer: number | null = null;
+  let lastResumeAt = 0;
   let turnUpgradeStartAt = 0;
 
   const logEntries = ref<
@@ -268,6 +270,21 @@ export const useDaylistStore = defineStore('daylist', () => {
       window.clearTimeout(turnUpgradeTimer);
       turnUpgradeTimer = null;
     }
+  };
+
+  const resumeSync = (reason: string) => {
+    if (!initialized.value) return;
+    const now = Date.now();
+    if (now - lastResumeAt < 2000) return;
+    lastResumeAt = now;
+    if (resumeTimer != null) {
+      window.clearTimeout(resumeTimer);
+      resumeTimer = null;
+    }
+    resumeTimer = window.setTimeout(() => {
+      logEvent('sync:resume_reconnect', { reason });
+      connectSync();
+    }, 200);
   };
 
   const connectSync = async () => {
@@ -854,6 +871,15 @@ export const useDaylistStore = defineStore('daylist', () => {
         logEvent('version:check_failed', { error: errToObj(error) }, 'DEBUG');
       },
       log: logEvent
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) resumeSync('visibility');
+    });
+    window.addEventListener('focus', () => resumeSync('focus'));
+    window.addEventListener('online', () => resumeSync('online'));
+    window.addEventListener('pageshow', (event) => {
+      if ((event as PageTransitionEvent).persisted) resumeSync('pageshow:bfcache');
     });
 
     try {
