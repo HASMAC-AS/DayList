@@ -35,9 +35,7 @@ import { buildTodaySections } from './todayView.js';
 
 /* ------------------------------ Utilities ------------------------------ */
 const DEFAULT_SIGNALING = [
-  'wss://signaling.yjs.dev',
-  'wss://y-webrtc-signaling-eu.herokuapp.com',
-  'wss://y-webrtc-signaling-us.herokuapp.com'
+  'wss://daylist-signaling.onrender.com/ws'
 ];
 
 // Metered TURN credentials endpoint (you can change the UUID part if you use a different Metered app)

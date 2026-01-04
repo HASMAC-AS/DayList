@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
+    "dev": "python3 -m http.server 5173",
     "test:e2e": "npx --yes playwright install --with-deps && npx --yes @playwright/test test"
   },
   "devDependencies": {
