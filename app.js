@@ -258,6 +258,7 @@ async function getIceServers(turnKey) {
     const iceServers = await res.json();
     if (!isValidIceServers(iceServers)) throw new Error('Unexpected Metered response');
     saveMeteredIceCache(iceServers);
+     console.log(iceServers);
     return iceServers;
   } catch (e) {
     // Fallback to cache even if stale, else STUN-only.
