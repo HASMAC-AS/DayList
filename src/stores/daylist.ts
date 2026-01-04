@@ -244,7 +244,7 @@ export const useDaylistStore = defineStore('daylist', () => {
 
   const connectSync = async () => {
     if (!ydocHandles.value) return;
-    const hasPeers = () => peerCount.value > 0 || webrtcPeers.value.length > 0;
+    const hasPeers = () => peerCount.value > 0;
 
     const maybeSkipTurn = (reason: string) => {
       if (!turnUpgradeTimer) return false;
@@ -252,7 +252,8 @@ export const useDaylistStore = defineStore('daylist', () => {
       logEvent('turn:skip_peers_present', {
         reason,
         peerCount: peerCount.value,
-        webrtcPeers: webrtcPeers.value.length
+        webrtcPeers: webrtcPeers.value.length,
+        bcPeers: bcPeers.value.length
       });
       clearTurnUpgradeTimer();
       return true;
@@ -310,6 +311,9 @@ export const useDaylistStore = defineStore('daylist', () => {
           rebuildDerivedState();
           maybeSkipTurn('awareness');
         },
+        onStatus: () => {
+          updateSyncBadge();
+        },
         onSignalingStatus: (status) => {
           signalingStatus[status.url] = status;
         },
@@ -347,13 +351,15 @@ export const useDaylistStore = defineStore('daylist', () => {
         logEvent('turn:upgrade_check', {
           delayMs: TURN_UPGRADE_DELAY_MS,
           peerCount: peerCount.value,
-          webrtcPeers: webrtcPeers.value.length
+          webrtcPeers: webrtcPeers.value.length,
+          bcPeers: bcPeers.value.length
         });
         if (hasPeers()) {
           logEvent('turn:skip_peers_present', {
             reason: 'delay_check',
             peerCount: peerCount.value,
-            webrtcPeers: webrtcPeers.value.length
+            webrtcPeers: webrtcPeers.value.length,
+            bcPeers: bcPeers.value.length
           });
           clearTurnUpgradeTimer();
           return;
@@ -372,7 +378,8 @@ export const useDaylistStore = defineStore('daylist', () => {
           logEvent('turn:skip_peers_present', {
             reason: 'post_fetch',
             peerCount: peerCount.value,
-            webrtcPeers: webrtcPeers.value.length
+            webrtcPeers: webrtcPeers.value.length,
+            bcPeers: bcPeers.value.length
           });
           clearTurnUpgradeTimer();
           return;

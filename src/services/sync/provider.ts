@@ -22,6 +22,7 @@ export async function connectProvider(opts: {
   signaling: string[];
   iceServers: RTCIceServer[];
   onAwarenessChange: () => void;
+  onStatus?: (status: { connected: boolean }) => void;
   onSignalingStatus?: (status: SignalingStatus) => void;
   onPeers?: (peers: { webrtcPeers: string[]; bcPeers: string[] }) => void;
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
@@ -162,6 +163,9 @@ export async function connectProvider(opts: {
 
   provider.on('status', (event) => {
     opts.onLog?.('provider:status', event);
+    if (event && typeof event === 'object' && 'connected' in event) {
+      opts.onStatus?.({ connected: !!(event as { connected?: boolean }).connected });
+    }
   });
 
   provider.on('peers', (event) => {
