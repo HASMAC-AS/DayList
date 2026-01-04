@@ -100,138 +100,141 @@ function parseSignalingList(s) {
     .filter(Boolean);
 }
 
-/* --------------------------- Debug + Logging --------------------------- */
-const DEBUG_Q = 'debug';
-const DEBUG_LS = 'daylist.debug.enabled.v1';
-const DEBUG_LOG_LS = 'daylist.debug.log.v1';
-const DEBUG_LOG_MAX = 500;
+/* ------------------------- Debug + Persistence Logs ------------------------- */
+
+// Toggle verbose logging via:
+//   ?debug=1   (URL)
+// or
+//   localStorage.setItem('daylist.debug.enabled', '1')
+const LS_DEBUG_ENABLED = 'daylist.debug.enabled';
+const LS_DEBUG_LOG = 'daylist.debug.log.v1';
+const DEBUG_LOG_MAX = 600;
+
+function safeGetLS(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function safeSetLS(key, value) {
+  try { localStorage.setItem(key, value); return true; } catch { return false; }
+}
+function safeRemoveLS(key) {
+  try { localStorage.removeItem(key); return true; } catch { return false; }
+}
 
 function isDebugEnabled() {
   try {
-    const url = new URL(window.location.href);
-    const q = (url.searchParams.get(DEBUG_Q) || '').trim();
-    if (q === '1' || q === 'true') return true;
-    return localStorage.getItem(DEBUG_LS) === '1';
-  } catch {
-    return false;
-  }
+    const url = new URL(location.href);
+    const q = (url.searchParams.get('debug') || '').trim();
+    if (q) return q === '1' || q.toLowerCase() === 'true';
+  } catch {}
+  return (safeGetLS(LS_DEBUG_ENABLED) || '').trim() === '1';
 }
+
 const DEBUG = isDebugEnabled();
 
-function tsIso(t = Date.now()) {
-  return new Date(t).toISOString();
-}
-
-function safeJson(x) {
-  try { return JSON.parse(JSON.stringify(x)); } catch { return String(x); }
-}
-
-function loadDebugLog() {
+// Persistent console-ish log buffer so you can inspect what happened after refresh.
+let __dlLogBuf = (() => {
   try {
-    const raw = localStorage.getItem(DEBUG_LOG_LS);
+    const raw = safeGetLS(LS_DEBUG_LOG);
     if (!raw) return [];
     const arr = JSON.parse(raw);
     return Array.isArray(arr) ? arr : [];
   } catch {
     return [];
   }
+})();
+
+function errToObj(e) {
+  if (!e) return null;
+  if (typeof e === 'string') return { message: e };
+  return {
+    name: e.name,
+    message: e.message,
+    stack: e.stack
+  };
 }
 
-function saveDebugLog(arr) {
-  try {
-    localStorage.setItem(DEBUG_LOG_LS, JSON.stringify(arr.slice(-DEBUG_LOG_MAX)));
-  } catch {
-    // ignore quota failures
+// Avoid storing non-JSON-safe stuff in the persisted debug log.
+function toJsonSafe(x) {
+  if (x == null) return x;
+  try { return JSON.parse(JSON.stringify(x)); } catch { return String(x); }
+}
+
+// Redact secrets (encryption keys, TURN keys, etc)
+function redact(s, keep = 4) {
+  const t = String(s || '');
+  if (!t) return '';
+  if (t.length <= keep * 2) return '*'.repeat(t.length);
+  return `${t.slice(0, keep)}…${t.slice(-keep)} (len=${t.length})`;
+}
+
+const flushDebugLog = debounce(() => {
+  try { safeSetLS(LS_DEBUG_LOG, JSON.stringify(__dlLogBuf.slice(-DEBUG_LOG_MAX))); } catch {}
+}, 250);
+
+function log(event, data = null, level = 'INFO') {
+  const entry = {
+    t: Date.now(),
+    iso: new Date().toISOString(),
+    level,
+    event,
+    data: toJsonSafe(data)
+  };
+
+  // Always store to buffer if DEBUG; optionally you can store always by removing the if.
+  if (DEBUG) {
+    __dlLogBuf.push(entry);
+    if (__dlLogBuf.length > DEBUG_LOG_MAX) __dlLogBuf = __dlLogBuf.slice(-DEBUG_LOG_MAX);
+    flushDebugLog();
+
+    // Console output (human friendly)
+    const prefix = `[DayList] ${entry.iso} ${level} ${event}`;
+    // Keep console logs readable: data only if present.
+    if (data == null) console.log(prefix);
+    else console.log(prefix, data);
   }
 }
 
-let __debugLog = loadDebugLog();
-
-function log(level, msg, data) {
-  const entry = { t: Date.now(), iso: tsIso(), level, msg, data: data == null ? null : safeJson(data) };
-  __debugLog.push(entry);
-  if (__debugLog.length > DEBUG_LOG_MAX) __debugLog = __debugLog.slice(-DEBUG_LOG_MAX);
-  saveDebugLog(__debugLog);
-
-  const prefix = `[DayList ${entry.iso}]`;
-  // Always log warnings/errors; debug/info only if DEBUG enabled
-  if (level === 'error') console.error(prefix, msg, data ?? '');
-  else if (level === 'warn') console.warn(prefix, msg, data ?? '');
-  else if (DEBUG) console.log(prefix, msg, data ?? '');
-}
-
+// Dump/copy logs quickly from DevTools:
 window.daylistDebug = {
   enabled: DEBUG,
-  enable() { try { localStorage.setItem(DEBUG_LS, '1'); } catch {} log('info', 'Debug enabled (reload to apply)'); },
-  disable() { try { localStorage.removeItem(DEBUG_LS); } catch {} log('info', 'Debug disabled (reload to apply)'); },
-  dumpLog() { return loadDebugLog(); },
-  clearLog() { try { localStorage.removeItem(DEBUG_LOG_LS); } catch {} },
+  getLogs: () => __dlLogBuf.slice(),
+  clearLogs: () => { __dlLogBuf = []; safeRemoveLS(LS_DEBUG_LOG); },
+  enable: () => { safeSetLS(LS_DEBUG_ENABLED, '1'); location.reload(); },
+  disable: () => { safeRemoveLS(LS_DEBUG_ENABLED); location.reload(); }
 };
 
-async function storageDiagnostics() {
-  log('info', 'Storage diagnostics: start', {
-    href: window.location.href,
-    origin: window.location.origin,
-    ua: navigator.userAgent,
-    standalone: window.matchMedia?.('(display-mode: standalone)')?.matches ?? null
-  });
+// Catch silent failures (you had a lot of `catch(() => {})`):
+window.addEventListener('error', (e) => {
+  log('window:error', {
+    message: e.message,
+    filename: e.filename,
+    lineno: e.lineno,
+    colno: e.colno,
+    error: errToObj(e.error)
+  }, 'ERROR');
+});
 
-  // localStorage sanity
-  try {
-    const k = '__daylist_ls_test__';
-    localStorage.setItem(k, String(Date.now()));
-    localStorage.removeItem(k);
-    log('info', 'localStorage: OK');
-  } catch (e) {
-    log('error', 'localStorage: FAILED', { e: String(e) });
-  }
+window.addEventListener('unhandledrejection', (e) => {
+  log('window:unhandledrejection', { reason: errToObj(e.reason) }, 'ERROR');
+});
 
-  // IndexedDB sanity
-  try {
-    await new Promise((resolve, reject) => {
-      const req = indexedDB.open('__daylist_idb_test__', 1);
-      req.onupgradeneeded = () => { /* noop */ };
-      req.onsuccess = () => { req.result.close(); resolve(); };
-      req.onerror = () => reject(req.error || new Error('IDB open failed'));
-    });
-    indexedDB.deleteDatabase('__daylist_idb_test__');
-    log('info', 'indexedDB: OK');
-  } catch (e) {
-    log('error', 'indexedDB: FAILED', { e: String(e) });
-  }
-
-  // Storage persistence (prevents browser eviction)
-  try {
-    if (navigator.storage?.persisted && navigator.storage?.persist) {
-      const persisted = await navigator.storage.persisted();
-      log('info', 'storage.persisted()', { persisted });
-      if (!persisted) {
-        const granted = await navigator.storage.persist();
-        log('info', 'storage.persist() requested', { granted });
-      }
-    }
-  } catch (e) {
-    log('warn', 'storage.persist() check failed', { e: String(e) });
-  }
-
-  // Quota estimate
-  try {
-    if (navigator.storage?.estimate) {
-      const est = await navigator.storage.estimate();
-      log('info', 'storage.estimate()', est);
-    }
-  } catch (e) {
-    log('warn', 'storage.estimate() failed', { e: String(e) });
-  }
-
-  log('info', 'Storage diagnostics: end');
-}
+// One-time boot info
+log('boot:env', {
+  href: location.href,
+  origin: location.origin,
+  secureContext: !!window.isSecureContext,
+  ua: navigator.userAgent
+});
 
 /* ----------------------------- PWA wiring ----------------------------- */
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker.register('./sw.js')
+      .then((reg) => log('sw:registered', { scope: reg.scope }))
+      .catch((e) => log('sw:register_failed', { error: errToObj(e) }, 'WARN'));
   });
+} else {
+  log('sw:unsupported');
 }
 
 /* ------------------------------ URL keys ------------------------------ */
@@ -375,6 +378,7 @@ async function getIceServers(turnKey) {
   // Use cache if fresh
   const cached = loadMeteredIceCache();
   if (cached && (Date.now() - cached.fetchedAt) < METERED_CACHE_TTL_MS && isValidIceServers(cached.iceServers)) {
+    log('turn:cache_hit_fresh', { ageMs: Date.now() - cached.fetchedAt, count: cached.iceServers.length });
     return cached.iceServers;
   }
 
@@ -385,14 +389,23 @@ async function getIceServers(turnKey) {
     const iceServers = await res.json();
     if (!isValidIceServers(iceServers)) throw new Error('Unexpected Metered response');
     saveMeteredIceCache(iceServers);
-     console.log(iceServers);
+    log('turn:fetched_ice', {
+      count: iceServers.length,
+      sample: iceServers.slice(0, 2).map(s => ({ urls: s.urls }))
+    });
     return iceServers;
   } catch (e) {
     // Fallback to cache even if stale, else STUN-only.
     if (cached && isValidIceServers(cached.iceServers)) {
+      log('turn:fetch_failed_using_stale_cache', {
+        error: errToObj(e),
+        ageMs: Date.now() - cached.fetchedAt,
+        count: cached.iceServers.length
+      }, 'WARN');
       toast('TURN fetch failed; using cached TURN credentials');
       return cached.iceServers;
     }
+    log('turn:fetch_failed_stun_only', { error: errToObj(e) }, 'WARN');
     toast('TURN fetch failed; falling back to STUN only');
     return [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -403,15 +416,38 @@ async function getIceServers(turnKey) {
 
 /* ------------------------------ Yjs setup ------------------------------ */
 const ydoc = new Y.Doc();
-const persistence = new IndexeddbPersistence('daylist-v1', ydoc);
-persistence.on('synced', () => {
-  log('info', 'IndexedDB persistence: synced', { counts: docCounts() });
-});
+let persistence = null;
+let idbSynced = false;
+let idbSyncedAt = 0;
+
+try {
+  persistence = new IndexeddbPersistence('daylist-v1', ydoc);
+  log('idb:init_ok', { docName: 'daylist-v1' });
+
+  // y-indexeddb fires "synced" when DB is connected and content loaded (even if empty).
+  persistence.on('synced', () => {
+    idbSynced = true;
+    idbSyncedAt = Date.now();
+    log('idb:synced', { at: idbSyncedAt });
+  });
+} catch (e) {
+  // If IndexedDB is blocked/errored, you still want snapshot persistence to work.
+  persistence = null;
+  log('idb:init_failed', { error: errToObj(e) }, 'ERROR');
+}
 
 // Shared structures
 const yTasks = ydoc.getMap('tasks');          // id -> Y.Map
 const yTemplates = ydoc.getMap('templates');  // key -> Y.Map
 const yHistory = ydoc.getMap('history');      // dayKey -> Y.Map(taskId -> completedAt)
+
+function docCounts() {
+  return {
+    tasks: yTasks.size,
+    templates: yTemplates.size,
+    historyDays: yHistory.size
+  };
+}
 
 let provider = null;
 let fuse = null;
@@ -449,109 +485,85 @@ const els = {
 };
 
 /* ------------------------------ Persistence --------------------------- */
-let hydrationComplete = false;  // guard to avoid persisting "empty boot" state
-let lastSnapshotMeta = null;
 
-function snapshotMeta(snapshot) {
-  const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks.length : 0;
-  const templates = snapshot?.templates && typeof snapshot.templates === 'object'
-    ? Object.keys(snapshot.templates).length
-    : 0;
-  const historyDays = snapshot?.history && typeof snapshot.history === 'object'
-    ? Object.keys(snapshot.history).length
-    : 0;
-  return { v: snapshot?.v ?? null, exportedAt: snapshot?.exportedAt ?? null, tasks, templates, historyDays };
-}
-
-function docCounts() {
-  let tasks = 0, templates = 0, historyDays = 0;
-  try { tasks = yTasks.size; } catch {}
-  try { templates = yTemplates.size; } catch {}
-  try { historyDays = yHistory.size; } catch {}
-  return { tasks, templates, historyDays };
-}
+let snapshotDirty = false;
 
 function writeSnapshot(reason = 'unknown') {
+  // Only flush if something changed, unless it's an explicit lifecycle flush.
+  const force = reason === 'pagehide' || reason === 'beforeunload' || reason === 'visibility:hidden';
+  if (!snapshotDirty && !force) return;
+
   try {
     const before = docCounts();
-    const t0 = performance.now();
     const snapshot = exportSnapshot({ historyDays: 120 });
-    const meta = snapshotMeta(snapshot);
     const json = JSON.stringify(snapshot);
-    localStorage.setItem(SNAPSHOT_KEY, json);
-    lastSnapshotMeta = meta;
 
-    const t1 = performance.now();
-    log('info', 'Snapshot written', {
+    const ok = safeSetLS(SNAPSHOT_KEY, json);
+
+    snapshotDirty = false;
+
+    log('snapshot:write', {
       reason,
+      ok,
       bytes: json.length,
-      meta,
-      docBefore: before,
-      tookMs: Math.round((t1 - t0) * 10) / 10
-    });
+      exportedAt: snapshot.exportedAt,
+      counts: {
+        tasks: snapshot.tasks?.length || 0,
+        templates: snapshot.templates ? Object.keys(snapshot.templates).length : 0,
+        historyDays: snapshot.history ? Object.keys(snapshot.history).length : 0
+      },
+      beforeDoc: before,
+      afterDoc: docCounts()
+    }, ok ? 'INFO' : 'WARN');
   } catch (e) {
-    log('error', 'Snapshot write FAILED', { reason, e: String(e) });
+    log('snapshot:write_failed', { reason, error: errToObj(e) }, 'ERROR');
   }
 }
 
-const saveSnapshot = debounce((reason) => writeSnapshot(reason), 600);
+// Faster than 800ms, and we also have an interval safety net.
+const saveSnapshot = debounce(() => writeSnapshot('debounced'), 250);
 
-function persistNow(reason) {
-  // synchronous, immediate
-  writeSnapshot(reason);
-}
+// Flush on more lifecycle signals (pagehide is good, but not always enough on mobile/PWA)
+window.addEventListener('pagehide', () => writeSnapshot('pagehide'));
+window.addEventListener('beforeunload', () => writeSnapshot('beforeunload'));
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) writeSnapshot('visibility:hidden');
+});
 
-function readSnapshotRaw() {
-  try {
-    return localStorage.getItem(SNAPSHOT_KEY);
-  } catch (e) {
-    log('error', 'Snapshot read FAILED (localStorage)', { e: String(e) });
-    return null;
+// Safety net: if updates keep streaming in and debounce never fires, flush periodically
+setInterval(() => writeSnapshot('interval'), 10_000);
+
+async function bootstrapFromLocalStorage() {
+  const raw = safeGetLS(SNAPSHOT_KEY);
+  if (!raw) {
+    log('snapshot:boot_none');
+    return false;
   }
-}
 
-function parseSnapshot(raw) {
   try {
     const obj = JSON.parse(raw);
-    return obj;
+    const before = docCounts();
+
+    log('snapshot:boot_found', {
+      bytes: raw.length,
+      exportedAt: obj?.exportedAt,
+      v: obj?.v,
+      snapshotCounts: {
+        tasks: Array.isArray(obj?.tasks) ? obj.tasks.length : 0,
+        templates: obj?.templates ? Object.keys(obj.templates).length : 0,
+        historyDays: obj?.history ? Object.keys(obj.history).length : 0
+      }
+    });
+
+    importSnapshot(obj);
+
+    log('snapshot:boot_imported', { beforeDoc: before, afterDoc: docCounts() });
+    return true;
   } catch (e) {
-    log('error', 'Snapshot JSON parse FAILED', { e: String(e), sample: String(raw).slice(0, 120) });
-    return null;
+    log('snapshot:boot_failed', { error: errToObj(e) }, 'ERROR');
+    return false;
   }
 }
-
-async function bootstrapFromLocalStorage(tag = 'bootstrap') {
-  const raw = readSnapshotRaw();
-  if (!raw) {
-    log('info', 'No snapshot found in localStorage', { tag });
-    return { loaded: false, imported: false, meta: null };
-  }
-
-  log('info', 'Snapshot found in localStorage', { tag, bytes: raw.length });
-
-  const snap = parseSnapshot(raw);
-  if (!snap) return { loaded: true, imported: false, meta: null };
-
-  const meta = snapshotMeta(snap);
-  lastSnapshotMeta = meta;
-  log('info', 'Snapshot meta', { tag, meta, docBefore: docCounts() });
-
-  try {
-    importSnapshot(snap);
-    log('info', 'Snapshot imported (merge-only)', { tag, docAfter: docCounts() });
-    return { loaded: true, imported: true, meta };
-  } catch (e) {
-    log('error', 'Snapshot import FAILED', { tag, e: String(e) });
-    return { loaded: true, imported: false, meta };
-  }
-}
-
-// Flush points: refresh, tab hidden, iOS quirks, etc.
-window.addEventListener('pagehide', () => persistNow('pagehide'));
-window.addEventListener('beforeunload', () => persistNow('beforeunload'));
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') persistNow('visibility.hidden');
-});
 
 function exportSnapshot({ historyDays = 120 } = {}) {
   const tasks = [];
@@ -663,7 +675,7 @@ function importSnapshot(snapshot) {
       }
     }
   });
-  persistNow('importSnapshot');
+  writeSnapshot('importSnapshot');
 }
 
 /* ---------------------------- Sync connect ---------------------------- */
@@ -815,7 +827,7 @@ function addTaskFromUI() {
     ytask.set('templateKey', touchTemplate(title, type, dueAt));
     yTasks.set(id, ytask);
   });
-  persistNow('addTaskFromUI');
+  writeSnapshot('addTaskFromUI');
 
   els.titleInput.value = '';
   els.titleInput.focus();
@@ -843,7 +855,7 @@ function toggleCompletion(id, checked) {
       if (type === 'scheduled') ytask.set('doneAt', null);
     }
   });
-  persistNow('toggleCompletion');
+  writeSnapshot('toggleCompletion');
 }
 
 function archiveTask(id) {
@@ -852,7 +864,7 @@ function archiveTask(id) {
     if (!ytask) return;
     ytask.set('archivedAt', Date.now());
   });
-  persistNow('archiveTask');
+  writeSnapshot('archiveTask');
 }
 
 function renameTask(id, newTitle) {
@@ -867,7 +879,7 @@ function renameTask(id, newTitle) {
     const dueAt = ytask.get('dueAt') == null ? null : Number(ytask.get('dueAt'));
     ytask.set('templateKey', touchTemplate(title, type, dueAt));
   });
-  persistNow('renameTask');
+  writeSnapshot('renameTask');
 }
 
 function setTaskActive(id, active) {
@@ -876,7 +888,7 @@ function setTaskActive(id, active) {
     if (!ytask) return;
     ytask.set('active', !!active);
   });
-  persistNow('setTaskActive');
+  writeSnapshot('setTaskActive');
 }
 
 /* ------------------------- Suggestion ranking -------------------------- */
@@ -1220,14 +1232,30 @@ els.wipeBtn.addEventListener('click', async () => {
   const ok = confirm('This will delete ALL local data (IndexedDB + localStorage mirror). Continue?');
   if (!ok) return;
 
+  log('wipe:begin');
+
   try {
-    localStorage.removeItem(SNAPSHOT_KEY);
-    localStorage.removeItem(LS_METERED_ICE_CACHE);
-    await persistence.clearData();
+    safeRemoveLS(SNAPSHOT_KEY);
+    safeRemoveLS(LS_METERED_ICE_CACHE);
+
+    // Optional: also clear persisted debug logs
+    // safeRemoveLS(LS_DEBUG_LOG);
+
+    if (persistence?.clearData) {
+      await persistence.clearData();
+      log('wipe:idb_cleared');
+    } else {
+      log('wipe:idb_not_available', null, 'WARN');
+    }
+
     ydoc.transact(() => { yTasks.clear(); yTemplates.clear(); yHistory.clear(); });
-    persistNow('wipe');
+    log('wipe:ydoc_cleared', { counts: docCounts() });
     toast('Wiped');
-  } catch { toast('Wipe failed'); }
+    log('wipe:done');
+  } catch (e) {
+    log('wipe:failed', { error: errToObj(e) }, 'ERROR');
+    toast('Wipe failed');
+  }
 });
 
 /* ------------------------------ Toasts -------------------------------- */
@@ -1248,25 +1276,51 @@ function setDefaultsAndHydrateInputs() {
 }
 
 ydoc.on('update', (update, origin) => {
-  const bytes = update?.byteLength ?? null;
+  snapshotDirty = true;
+
   const originName =
     origin == null ? 'null' :
     (typeof origin === 'string' ? origin :
-     origin.constructor?.name || typeof origin);
+      (origin.constructor?.name || typeof origin));
 
-  log('info', 'Y.Doc update', {
-    bytes,
+  log('ydoc:update', {
+    updateBytes: update?.length ?? null,
     origin: originName,
-    counts: docCounts(),
-    hydrationComplete
-  });
+    counts: docCounts()
+  }, 'INFO');
 
   rebuildTemplateIndex();
   scheduleRender();
+  saveSnapshot();
+});
 
-  // Prevent the classic foot-gun: persisting an "empty boot doc" before we hydrate.
-  if (hydrationComplete) saveSnapshot('ydoc.update');
-  else log('info', 'Skip snapshot save (hydration not complete yet)', { bytes, origin: originName });
+ydoc.on('afterTransaction', (tr) => {
+  // Avoid spewing if DEBUG isn't enabled.
+  if (!DEBUG) return;
+
+  const originName =
+    tr?.origin == null ? 'null' :
+    (typeof tr.origin === 'string' ? tr.origin :
+      (tr.origin?.constructor?.name || typeof tr.origin));
+
+  const changed = [];
+  try {
+    tr.changed.forEach((subs, type) => {
+      const keyCount = subs?.size ?? 0;
+      let typeName = type?.constructor?.name || 'Type';
+      // label your known root maps
+      if (type === yTasks) typeName = 'yTasks';
+      if (type === yTemplates) typeName = 'yTemplates';
+      if (type === yHistory) typeName = 'yHistory';
+      changed.push({ type: typeName, keyCount });
+    });
+  } catch {}
+
+  log('ydoc:afterTransaction', {
+    local: !!tr.local,
+    origin: originName,
+    changed
+  }, 'DEBUG');
 });
 
 setInterval(() => scheduleRender(), 30 * 1000);
@@ -1274,38 +1328,52 @@ setInterval(() => scheduleRender(), 30 * 1000);
 (async function main() {
   setDefaultsAndHydrateInputs();
 
-  // Loud startup logs so you can diagnose "why did it forget?"
-  await storageDiagnostics();
-
-  log('info', 'BOOT: start', { counts: docCounts() });
-
-  // 1) Restore ASAP from localStorage snapshot so refresh never shows empty if we have a backup.
-  await bootstrapFromLocalStorage('boot.pre-idb');
-
-  // 2) Wait for IndexedDB (Yjs) to load, but DO NOT hang forever if IDB is blocked.
+  // Log storage status
   try {
-    const IDB_TIMEOUT_MS = 4000;
-    const timed = await Promise.race([
-      persistence.whenSynced.then(() => 'synced'),
-      new Promise((r) => setTimeout(() => r('timeout'), IDB_TIMEOUT_MS))
-    ]);
-    log('info', 'IndexedDB persistence.whenSynced result', { timed, counts: docCounts() });
+    if (navigator.storage?.estimate) {
+      const est = await navigator.storage.estimate();
+      log('storage:estimate', { usage: est.usage, quota: est.quota });
+    }
+    if (navigator.storage?.persisted) {
+      const persisted = await navigator.storage.persisted();
+      log('storage:persisted', { persisted });
+    }
   } catch (e) {
-    log('error', 'IndexedDB persistence.whenSynced FAILED', { e: String(e) });
+    log('storage:estimate_failed', { error: errToObj(e) }, 'WARN');
   }
 
-  // 3) Re-apply snapshot after IDB too (merge-only, idempotent). Helps if IDB is empty/blocked.
-  await bootstrapFromLocalStorage('boot.post-idb');
+  // Wait for IndexedDB to load (if available). Use the documented "synced" event.
+  if (persistence) {
+    log('idb:waiting_for_synced');
+    await new Promise((resolve) => {
+      if (idbSynced) return resolve(true);
+      const handler = () => {
+        try { persistence.off('synced', handler); } catch {}
+        resolve(true);
+      };
+      persistence.on('synced', handler);
+    });
 
-  // From here on, updates are “real” and safe to persist.
-  hydrationComplete = true;
-  persistNow('boot.finalize');
+    log('idb:ready', { at: idbSyncedAt, counts: docCounts() });
+
+    // Small meta-write to prove the DB is actually writable.
+    try {
+      const prev = await persistence.get?.('meta:lastRunAt');
+      log('idb:meta_read', { prev });
+      await persistence.set?.('meta:lastRunAt', Date.now());
+      log('idb:meta_write_ok');
+    } catch (e) {
+      log('idb:meta_write_failed', { error: errToObj(e) }, 'WARN');
+    }
+  } else {
+    log('idb:disabled_using_snapshot_only', null, 'WARN');
+  }
+
+  // Now bootstrap the snapshot mirror (safe additive import).
+  await bootstrapFromLocalStorage();
 
   rebuildTemplateIndex();
-
   await connectSync();
   render();
-
-  log('info', 'BOOT: ready', { counts: docCounts(), lastSnapshotMeta });
   toast('Ready');
 })();
