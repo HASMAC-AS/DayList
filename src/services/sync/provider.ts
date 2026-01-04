@@ -23,6 +23,7 @@ export async function connectProvider(opts: {
   enc: string;
   signaling: string[];
   iceServers: RTCIceServer[];
+  preferredPeers?: string[];
   onAwarenessChange: () => void;
   onStatus?: (status: { connected: boolean }) => void;
   onSignalingStatus?: (status: SignalingStatus) => void;
@@ -228,6 +229,17 @@ export async function connectProvider(opts: {
     pendingPeers.clear();
   };
 
+  const tryPreferredPeers = (reason: string) => {
+    if (!opts.preferredPeers || opts.preferredPeers.length === 0) return;
+    const conn = getAnyConn();
+    if (!conn) return;
+    const room = getRoom();
+    if (!room) return;
+    opts.preferredPeers.forEach((peerId) => {
+      ensureWebrtcConn(peerId, conn, `preferred:${reason}`);
+    });
+  };
+
   const computeHasPeer = () => provider.awareness.getStates().size > 1;
   const updateHasPeer = (reason: string) => {
     const nowHasPeer = computeHasPeer();
@@ -283,7 +295,12 @@ export async function connectProvider(opts: {
   const maybeFlushPending = () => flushPendingPeers('room_ready');
   const keyPromise = (provider as { key?: PromiseLike<unknown> }).key;
   if (keyPromise && typeof keyPromise.then === 'function') {
-    keyPromise.then(maybeFlushPending).catch(() => {});
+    keyPromise
+      .then(() => {
+        maybeFlushPending();
+        tryPreferredPeers('room_ready');
+      })
+      .catch(() => {});
   }
 
   provider.awareness.on('change', (...args: unknown[]) => {
@@ -335,6 +352,7 @@ export async function connectProvider(opts: {
         resetSendTimer();
       }
       flushPendingPeers('signaling_connect');
+      tryPreferredPeers('signaling_connect');
     });
     conn.on('disconnect', () => {
       updateStatus();

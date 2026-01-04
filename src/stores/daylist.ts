@@ -58,6 +58,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const signalingStatus = reactive<Record<string, SignalingStatus>>({});
   const webrtcPeers = ref<string[]>([]);
   const bcPeers = ref<string[]>([]);
+  const recentPeers = ref<string[]>([]);
 
   const ydocHandles = shallowRef<YDocHandles | null>(null);
   const provider = shallowRef<WebrtcProvider | null>(null);
@@ -91,6 +92,32 @@ export const useDaylistStore = defineStore('daylist', () => {
   const logEvent = (event: string, data: unknown = null, level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' = 'INFO') => {
     pushLog(event, data, level);
     logger.value?.log(event, data, level);
+  };
+
+  const persistRecentPeers = async (peers: string[]) => {
+    if (!ydocHandles.value?.persistence?.set) return;
+    try {
+      await ydocHandles.value.persistence.set('meta:lastPeers', peers);
+      logEvent('idb:meta_last_peers_write', { count: peers.length });
+    } catch (e) {
+      logEvent('idb:meta_last_peers_write_failed', { error: errToObj(e) }, 'WARN');
+    }
+  };
+
+  const updateRecentPeers = (peers: string[]) => {
+    if (!peers || peers.length === 0) return;
+    const next = recentPeers.value.slice();
+    peers.forEach((peerId) => {
+      if (!peerId) return;
+      const idx = next.indexOf(peerId);
+      if (idx !== -1) next.splice(idx, 1);
+      next.unshift(peerId);
+    });
+    const trimmed = next.slice(0, 3);
+    if (trimmed.join('|') !== recentPeers.value.join('|')) {
+      recentPeers.value = trimmed;
+      persistRecentPeers(trimmed);
+    }
   };
 
   const { show: toast } = useToastBus();
@@ -300,30 +327,32 @@ export const useDaylistStore = defineStore('daylist', () => {
         provider.value = null;
       }
 
-      provider.value = await connectProvider({
-        doc: ydocHandles.value,
-        room,
-        enc,
-        signaling: sig,
-        iceServers,
-        onAwarenessChange: () => {
-          updateSyncBadge();
-          rebuildDerivedState();
-          maybeSkipTurn('awareness');
-        },
+    provider.value = await connectProvider({
+      doc: ydocHandles.value,
+      room,
+      enc,
+      signaling: sig,
+      iceServers,
+      preferredPeers: recentPeers.value,
+      onAwarenessChange: () => {
+        updateSyncBadge();
+        rebuildDerivedState();
+        maybeSkipTurn('awareness');
+      },
         onStatus: () => {
           updateSyncBadge();
         },
         onSignalingStatus: (status) => {
           signalingStatus[status.url] = status;
         },
-        onPeers: (peers) => {
-          webrtcPeers.value = peers.webrtcPeers;
-          bcPeers.value = peers.bcPeers;
-          maybeSkipTurn('peers');
-        },
-        onLog: logEvent
-      });
+      onPeers: (peers) => {
+        webrtcPeers.value = peers.webrtcPeers;
+        bcPeers.value = peers.bcPeers;
+        updateRecentPeers(peers.webrtcPeers);
+        maybeSkipTurn('peers');
+      },
+      onLog: logEvent
+    });
 
       updateSyncBadge();
       logEvent('sync:provider_connected', { context, usingTurn: hasTurn });
@@ -660,6 +689,13 @@ export const useDaylistStore = defineStore('daylist', () => {
         logEvent('idb:meta_read', { prev });
         await doc.persistence.set?.('meta:lastRunAt', Date.now());
         logEvent('idb:meta_write_ok');
+
+        const lastPeers = await doc.persistence.get?.('meta:lastPeers');
+        if (Array.isArray(lastPeers)) {
+          const normalized = lastPeers.filter((p) => typeof p === 'string').slice(0, 3);
+          recentPeers.value = normalized;
+          logEvent('idb:meta_last_peers_read', { count: normalized.length });
+        }
       } catch (e) {
         logEvent('idb:meta_write_failed', { error: errToObj(e) }, 'WARN');
       }
