@@ -22,6 +22,7 @@ import {
 import type { HistoryDay, Task, TaskType, TemplateStat, SnapshotV1, SnapshotV2, SnapshotKeys } from '../lib/types';
 import { createDebugLogger, bindDebugWindow, type DebugLogger } from '../services/sync/debugLog';
 import { getIceServers } from '../services/sync/meteredTurn';
+import { createRateLimitedFetch } from '../services/sync/netThrottle';
 import { connectProvider, getPeerCount, type SignalingStatus } from '../services/sync/provider';
 import {
   createSnapshotMirror,
@@ -33,7 +34,7 @@ import { createYDoc, type YDocHandles } from '../services/sync/ydoc';
 import { persistKeysToStorage, resolveInitialKeys, type SyncKeys, writeKeysToUrl } from '../services/sync/keys';
 import { useToastBus } from '../services/toast';
 
-const DEFAULT_SIGNALING = ['wss://daylist-signaling.onrender.com/ws'];
+const DEFAULT_SIGNALING = ['wss://daylist-signaling.onrender.com/ws', 'wss://signaling.yjs.dev'];
 const HISTORY_DAYS = 7;
 const TURN_UPGRADE_DELAY_MS = 6000;
 
@@ -97,6 +98,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const dayKey = computed(() => logicalDayKey(nowTs.value));
   const dayLabel = computed(() => `Day: ${dayKey.value} (resets ${pad2(BOUNDARY_HOUR)}:00 local)`);
   const snapshotActive = computed(() => !!snapshotMirror.value);
+  const throttledFetch = createRateLimitedFetch(fetch, 300);
 
   const ensureTask = (id: string) => {
     const ytask = ydocHandles.value?.yTasks.get(id);
@@ -332,7 +334,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     const stunOnlyIce = await getIceServers({
       turnKey,
       allowTurn: false,
-      fetchFn: fetch,
+      fetchFn: throttledFetch,
       storage: localStorage,
       now: () => Date.now(),
       log: logEvent
@@ -342,6 +344,11 @@ export const useDaylistStore = defineStore('daylist', () => {
 
     if (turnKey) {
       turnUpgradeTimer = window.setTimeout(async () => {
+        logEvent('turn:upgrade_check', {
+          delayMs: TURN_UPGRADE_DELAY_MS,
+          peerCount: peerCount.value,
+          webrtcPeers: webrtcPeers.value.length
+        });
         if (hasPeers()) {
           logEvent('turn:skip_peers_present', {
             reason: 'delay_check',
@@ -355,12 +362,23 @@ export const useDaylistStore = defineStore('daylist', () => {
         const iceServers = await getIceServers({
           turnKey,
           allowTurn: true,
-          fetchFn: fetch,
+          fetchFn: throttledFetch,
           storage: localStorage,
           now: () => Date.now(),
           log: logEvent
         });
 
+        if (hasPeers()) {
+          logEvent('turn:skip_peers_present', {
+            reason: 'post_fetch',
+            peerCount: peerCount.value,
+            webrtcPeers: webrtcPeers.value.length
+          });
+          clearTurnUpgradeTimer();
+          return;
+        }
+
+        logEvent('turn:upgrade_connecting');
         await connectWithIce(iceServers, 'turn');
         clearTurnUpgradeTimer();
       }, TURN_UPGRADE_DELAY_MS);
