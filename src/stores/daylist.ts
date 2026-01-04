@@ -78,6 +78,8 @@ export const useDaylistStore = defineStore('daylist', () => {
   let resumeTimer: number | null = null;
   let lastResumeAt = 0;
   let watchdogTimer: number | null = null;
+  let lastHardReconnectAt = 0;
+  let lastOfflineAt = 0;
   let turnUpgradeStartAt = 0;
 
   const logEntries = ref<
@@ -280,6 +282,14 @@ export const useDaylistStore = defineStore('daylist', () => {
   const hasSignalingConnection = () =>
     Object.values(signalingStatus).some((status) => status && status.connected);
 
+  const hardReconnect = (reason: string) => {
+    const now = Date.now();
+    if (now - lastHardReconnectAt < 5000) return;
+    lastHardReconnectAt = now;
+    logEvent('sync:hard_reconnect', { reason });
+    connectSync();
+  };
+
   const kickSignaling = (reason: string) => {
     const now = Date.now();
     if (now - lastKickAt < 4000) return;
@@ -312,6 +322,11 @@ export const useDaylistStore = defineStore('daylist', () => {
     resumeTimer = window.setTimeout(() => {
       const age = signalingLastMessageAt.value ? now - signalingLastMessageAt.value : Infinity;
       const signalOk = hasSignalingConnection();
+      if (reason.includes('online') || reason.includes('network')) {
+        hardReconnect(`resume:${reason}`);
+        return;
+      }
+
       if (peerCount.value === 0) {
         kickSignaling(`resume:${reason}`);
         return;
@@ -941,7 +956,15 @@ export const useDaylistStore = defineStore('daylist', () => {
       if (!document.hidden) resumeSync('visibility');
     });
     window.addEventListener('focus', () => resumeSync('focus'));
-    window.addEventListener('online', () => resumeSync('online'));
+    window.addEventListener('online', () => {
+      logEvent('network:online');
+      resumeSync('network:online');
+    });
+    window.addEventListener('offline', () => {
+      lastOfflineAt = Date.now();
+      logEvent('network:offline', { at: lastOfflineAt });
+      signalingLastMessageAt.value = 0;
+    });
     window.addEventListener('pageshow', (event) => {
       if ((event as PageTransitionEvent).persisted) resumeSync('pageshow:bfcache');
     });
@@ -955,7 +978,8 @@ export const useDaylistStore = defineStore('daylist', () => {
       const neverSignaled = lastSignal === 0 && initialized.value;
       const recentLocalChange = lastLocalChangeAt.value > 0 && now - lastLocalChangeAt.value < 6000;
       if (staleSignal) {
-        resumeSync('watchdog:stale_signal');
+        if (navigator.onLine) hardReconnect('watchdog:stale_signal');
+        else resumeSync('watchdog:stale_signal');
       } else if (!providerConnected.value && (staleSignal || neverSignaled)) {
         resumeSync('watchdog:disconnected');
       } else if (peerCount.value === 0 && recentLocalChange) {

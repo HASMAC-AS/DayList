@@ -65,10 +65,13 @@ const suggestions = computed(() => store.buildSuggestions(title.value.trim()));
 const ensureInputVisible = () => {
   const input = inputRef.value;
   if (!input) return;
-  if (document.activeElement !== input) return;
+  const panel = rootRef.value?.closest('.composer-panel') as HTMLElement | null;
   requestAnimationFrame(() => {
     try {
-      input.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      if (panel) panel.scrollIntoView({ block: 'center', inline: 'nearest' });
+      if (document.activeElement === input) {
+        input.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
     } catch {
       // ignore
     }

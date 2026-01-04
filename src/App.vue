@@ -50,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { Settings } from 'lucide-vue-next';
 import TaskComposer from './components/TaskComposer.vue';
 import TaskListMain from './components/TaskListMain.vue';
@@ -65,6 +65,22 @@ const composerOpen = ref(false);
 
 onMounted(() => {
   store.initApp();
+});
+
+watch(composerOpen, (open) => {
+  const body = document.body;
+  if (!body) return;
+  if (open) {
+    const scrollY = window.scrollY || 0;
+    body.dataset.scrollY = String(scrollY);
+    body.classList.add('modal-open');
+    body.style.top = `-${scrollY}px`;
+  } else {
+    const y = Number(body.dataset.scrollY || '0');
+    body.classList.remove('modal-open');
+    body.style.top = '';
+    window.scrollTo(0, y);
+  }
 });
 
 const openComposer = () => {
