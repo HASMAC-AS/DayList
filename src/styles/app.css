@@ -590,6 +590,36 @@ button.danger {
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
 }
 
+.task-drag-item {
+  position: relative;
+}
+
+.task-drag-item + .task-drag-item {
+  margin-top: 10px;
+}
+
+.task-drag-item.dragging {
+  opacity: 0.6;
+}
+
+.task-drag-item.drag-over::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.task-drag-item.drag-over.before::before {
+  top: -6px;
+}
+
+.task-drag-item.drag-over.after::before {
+  bottom: -6px;
+}
+
 .task-wrap {
   position: relative;
   overflow: hidden;

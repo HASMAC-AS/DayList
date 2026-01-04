@@ -19,6 +19,7 @@ export function buildTodaySections(tasks: Task[], now: number = Date.now()): Tod
   const daily: Task[] = [];
   const scheduledDue: Task[] = [];
   const scheduledUpcoming: Task[] = [];
+  const orderValue = (task: Task) => (task.order == null ? task.createdAt || 0 : Number(task.order || 0));
 
   for (const task of tasks) {
     if (!task || task.archivedAt) continue;
@@ -31,8 +32,8 @@ export function buildTodaySections(tasks: Task[], now: number = Date.now()): Tod
     }
   }
 
-  daily.sort((a, b) => a.title.localeCompare(b.title));
-  scheduledDue.sort((a, b) => (a.dueAt || 0) - (b.dueAt || 0));
+  daily.sort((a, b) => orderValue(a) - orderValue(b));
+  scheduledDue.sort((a, b) => orderValue(a) - orderValue(b) || (a.dueAt || 0) - (b.dueAt || 0));
   scheduledUpcoming.sort((a, b) => (a.dueAt || 0) - (b.dueAt || 0));
 
   return {

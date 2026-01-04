@@ -17,7 +17,14 @@
       </button>
       <button class="task-action archive" type="button" @click="onArchive">Archive</button>
     </div>
-    <div class="task" :data-id="task.id" :style="{ transform: `translateX(${offsetX}px)` }" @click="onClickTask">
+    <div
+      class="task"
+      :data-id="task.id"
+      :style="{ transform: `translateX(${offsetX}px)` }"
+      @click="onClickTask"
+      @mousemove="onMouseMove"
+      @mouseleave="onMouseLeave"
+    >
       <label class="check">
         <input
           type="checkbox"
@@ -57,7 +64,7 @@ import { formatDateTime } from '../lib/core';
 import { isCompletedForDay } from '../lib/todayModel';
 import type { Task } from '../lib/types';
 
-const props = defineProps<{ task: Task; dayKey: string; upcoming?: boolean; syncing?: boolean }>();
+const props = defineProps<{ task: Task; dayKey: string; upcoming?: boolean; syncing?: boolean; dragging?: boolean }>();
 
 const emit = defineEmits<{
   toggle: [string, boolean];
@@ -73,6 +80,7 @@ const dueLabel = computed(() => (props.task.dueAt ? formatDateTime(props.task.du
 const startX = ref(0);
 const offsetX = ref(0);
 const swiped = ref(false);
+const hoverActive = ref(false);
 const showActions = computed(() => swiped.value || offsetX.value < -10);
 const maxSwipe = -140;
 
@@ -123,8 +131,32 @@ const onTouchEnd = () => {
   }
 };
 
+const onMouseMove = (event: MouseEvent) => {
+  if (props.dragging) return;
+  if (swiped.value) return;
+  const target = event.currentTarget as HTMLElement | null;
+  if (!target) return;
+  const rect = target.getBoundingClientRect();
+  const triggerX = rect.right - rect.width * 0.3;
+  if (event.clientX >= triggerX) {
+    hoverActive.value = true;
+    offsetX.value = maxSwipe;
+  } else if (hoverActive.value) {
+    hoverActive.value = false;
+    offsetX.value = 0;
+  }
+};
+
+const onMouseLeave = () => {
+  if (props.dragging) return;
+  if (swiped.value) return;
+  hoverActive.value = false;
+  offsetX.value = 0;
+};
+
 const resetSwipe = () => {
   swiped.value = false;
+  hoverActive.value = false;
   offsetX.value = 0;
 };
 

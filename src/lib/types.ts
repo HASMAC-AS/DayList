@@ -5,6 +5,7 @@ export interface Task {
   title: string;
   type: TaskType;
   createdAt: number;
+  order?: number | null;
   dueAt: number | null;
   active: boolean;
   archivedAt: number | null;
@@ -31,6 +32,7 @@ export interface SnapshotV1 {
     title: string;
     type: TaskType;
     createdAt: number;
+    order?: number | null;
     dueAt: number | null;
     active: boolean;
     archivedAt: number | null;

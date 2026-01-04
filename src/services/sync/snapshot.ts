@@ -24,6 +24,7 @@ export function exportSnapshot(doc: YDocHandles, opts: { historyDays?: number; n
       title: String(ytask.get('title') || ''),
       type: String(ytask.get('type') || 'daily') as SnapshotV1['tasks'][number]['type'],
       createdAt: Number(ytask.get('createdAt') || 0),
+      order: ytask.get('order') == null ? null : Number(ytask.get('order')),
       dueAt: ytask.get('dueAt') == null ? null : Number(ytask.get('dueAt')),
       active: ytask.get('active') !== false,
       archivedAt: ytask.get('archivedAt') == null ? null : Number(ytask.get('archivedAt')),
@@ -101,6 +102,7 @@ export function importSnapshot(doc: YDocHandles, snapshot: SnapshotV1) {
         ytask.set('title', String(t.title || ''));
         ytask.set('type', String(t.type || 'daily'));
         ytask.set('createdAt', Number(t.createdAt || Date.now()));
+        if (t.order != null) ytask.set('order', Number(t.order));
         ytask.set('dueAt', t.dueAt == null ? null : Number(t.dueAt));
         ytask.set('active', t.active !== false);
         ytask.set('archivedAt', t.archivedAt == null ? null : Number(t.archivedAt));

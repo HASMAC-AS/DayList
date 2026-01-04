@@ -108,6 +108,15 @@ export const useDaylistStore = defineStore('daylist', () => {
 
   const isTaskSyncing = (id: string) => pendingTaskIds.value.includes(id);
 
+  const nextTaskOrder = () => {
+    let max = 0;
+    tasks.value.forEach((task) => {
+      const value = task.order == null ? task.createdAt || 0 : Number(task.order || 0);
+      if (value > max) max = value;
+    });
+    return max + 1;
+  };
+
   const { show: toast } = useToastBus();
 
   const dayKey = computed(() => logicalDayKey(nowTs.value));
@@ -178,6 +187,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       title: String(ytask.get('title') || ''),
       type: String(ytask.get('type') || 'daily') as TaskType,
       createdAt: Number(ytask.get('createdAt') || 0),
+      order: ytask.get('order') == null ? null : Number(ytask.get('order')),
       dueAt: ytask.get('dueAt') == null ? null : Number(ytask.get('dueAt')),
       active: ytask.get('active') !== false,
       archivedAt: ytask.get('archivedAt') == null ? null : Number(ytask.get('archivedAt')),
@@ -466,6 +476,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       ytask.set('title', title);
       ytask.set('type', input.type);
       ytask.set('createdAt', Date.now());
+      ytask.set('order', nextTaskOrder());
       ytask.set('dueAt', dueAt);
       ytask.set('active', true);
       ytask.set('archivedAt', null);
@@ -477,6 +488,19 @@ export const useDaylistStore = defineStore('daylist', () => {
 
     if (needsSync) markTaskPending(id);
     snapshotMirror.value?.flush('addTask', true);
+  };
+
+  const reorderTasks = (orderedIds: string[]) => {
+    if (!ydocHandles.value) return;
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) return;
+    ydocHandles.value.ydoc.transact(() => {
+      orderedIds.forEach((id, index) => {
+        const ytask = ensureTask(id);
+        if (!ytask) return;
+        ytask.set('order', index);
+      });
+    });
+    snapshotMirror.value?.flush('reorderTasks', true);
   };
 
   const toggleCompletion = (id: string, checked: boolean) => {
@@ -880,6 +904,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     initApp,
     connectSync,
     addTask,
+    reorderTasks,
     toggleCompletion,
     renameTask,
     setTaskActive,
