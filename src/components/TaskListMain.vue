@@ -4,7 +4,7 @@
       <div
         class="barrel-track"
         :class="{ animating: isAnimating }"
-        :style="{ transform: `translateX(${trackOffset * 100}%)` }"
+        :style="{ transform: `translateX(${trackOffset * 33.3333}%)` }"
         @transitionend="onTrackTransitionEnd"
       >
         <div
