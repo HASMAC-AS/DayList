@@ -142,6 +142,8 @@ export const useDaylistStore = defineStore('daylist', () => {
   const lastLocalChangeAt = ref(0);
   let lastKickAt = 0;
   const signalingPeerSeenAt = ref(0);
+  let lastRelayAttemptAt = 0;
+  const RELAY_ATTEMPT_COOLDOWN_MS = 30_000;
 
   const ydocHandles = shallowRef<YDocHandles | null>(null);
   const provider = shallowRef<WebrtcProvider | null>(null);
@@ -202,6 +204,19 @@ export const useDaylistStore = defineStore('daylist', () => {
     if (info.iceState !== undefined) entry.iceState = String(info.iceState);
     if (info.signalState !== undefined) entry.signalState = String(info.signalState);
     if (info.error) entry.lastError = errToObj(info.error);
+  };
+
+  const maybeForceRelay = (reason: string) => {
+    if (!session.value) return;
+    if (!usingTurn.value) return;
+    if (iceState.value?.transport === 'relay') return;
+    const now = Date.now();
+    if (now - lastRelayAttemptAt < RELAY_ATTEMPT_COOLDOWN_MS) return;
+    lastRelayAttemptAt = now;
+    logEvent('ice:relay_attempt', { reason });
+    session.value.forceRelay(reason).catch((error) => {
+      logEvent('ice:relay_failed', { reason, error: errToObj(error) }, 'WARN');
+    });
   };
 
   const markTaskPending = (id: string) => {
@@ -737,6 +752,9 @@ export const useDaylistStore = defineStore('daylist', () => {
       },
       onPeerState: (info) => {
         updatePeerState(info);
+        if (info.event === 'ice_state' && String(info.iceState) === 'failed') {
+          maybeForceRelay(`peer:${info.peerId}`);
+        }
       },
       onIce: ({ config, reason }) => {
         usingTurn.value = config.mode !== 'stun';

@@ -44,6 +44,7 @@ export async function connectProvider(opts: {
   enc: string;
   signaling: string[];
   iceServers: RTCIceServer[];
+  iceTransport?: 'all' | 'relay';
   onAwarenessChange: () => void;
   onStatus?: (status: { connected: boolean }) => void;
   onSignalingStatus?: (status: SignalingStatus) => void;
@@ -193,7 +194,10 @@ export async function connectProvider(opts: {
     maxConns: Number.POSITIVE_INFINITY,
     filterBcConns: false,
     peerOpts: {
-      config: { iceServers: opts.iceServers }
+      config: {
+        iceServers: opts.iceServers,
+        iceTransportPolicy: opts.iceTransport === 'relay' ? 'relay' : 'all'
+      }
     }
   });
 

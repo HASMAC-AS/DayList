@@ -10,6 +10,7 @@ export type SyncSession = {
   getIceConfig(): IceConfig;
   start(reason?: string): Promise<void>;
   restart(reason: string): Promise<void>;
+  forceRelay(reason: string): Promise<void>;
   softReconnect(reason: string): void;
   dispose(): void;
 };
@@ -91,6 +92,7 @@ export async function createSyncSession(opts: {
       enc: opts.enc,
       signaling: opts.signaling,
       iceServers: config.iceServers,
+      iceTransport: config.transport,
       onAwarenessChange: () => {
         opts.onAwarenessChange?.();
       },
@@ -210,6 +212,24 @@ export async function createSyncSession(opts: {
     await buildProvider(bestConfig || currentConfig, reason);
   };
 
+  const forceRelay = async (reason: string) => {
+    if (disposed) return;
+    const target = bestConfig || currentConfig;
+    if (!hasTurn(target.iceServers)) {
+      opts.onLog?.('ice:relay_unavailable', { reason }, 'WARN');
+      return;
+    }
+    if (target.transport === 'relay') {
+      opts.onLog?.('ice:relay_skip', { reason }, 'DEBUG');
+      return;
+    }
+    const relayConfig: IceConfig = {
+      ...target,
+      transport: 'relay'
+    };
+    await buildProvider(relayConfig, `ice_relay:${reason}`);
+  };
+
   const softReconnect = (reason: string) => {
     if (!provider) return;
     try {
@@ -239,6 +259,7 @@ export async function createSyncSession(opts: {
     getIceConfig: () => currentConfig,
     start,
     restart,
+    forceRelay,
     softReconnect,
     dispose
   };
