@@ -1102,7 +1102,7 @@ details .bd {
   transform: translateX(-50%) translateY(-4px);
 }
 
-@media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
+@media (min-width: 409px) and (max-width: 1366px) and (pointer: coarse) {
   :root {
     --ipad-top: 100px;
   }
