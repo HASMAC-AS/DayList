@@ -16,13 +16,11 @@
         >
           <template #singlelabel="{ value }">
             <span class="list-label">
-              <span class="list-dot" :style="{ background: value?.color || DEFAULT_LIST_COLOR }" aria-hidden="true"></span>
               <span class="list-label-text">{{ value?.label || 'List' }}</span>
             </span>
           </template>
           <template #option="{ option }">
             <span class="list-option">
-              <span class="list-dot" :style="{ background: option.color }" aria-hidden="true"></span>
               <span class="list-label-text">{{ option.label }}</span>
             </span>
           </template>
@@ -62,9 +60,9 @@ const selectedLabel = computed(() => {
 
 const updateWidth = () => {
   const labelWidth = measureRef.value?.getBoundingClientRect().width || 0;
-  const extra = 96;
-  const minWidth = 140;
-  const maxWidth = typeof window === 'undefined' ? labelWidth + extra : Math.max(minWidth, window.innerWidth - 64);
+  const extra = 56;
+  const minWidth = 120;
+  const maxWidth = typeof window === 'undefined' ? labelWidth + extra : window.innerWidth - 48;
   dropdownWidth.value = Math.min(maxWidth, Math.max(minWidth, Math.ceil(labelWidth + extra)));
 };
 
