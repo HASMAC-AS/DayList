@@ -139,4 +139,29 @@ describe('signaling throttling', () => {
 
     expect(conn.sendCalls.length).toBe(2);
   });
+
+  it('returns to fast interval after peers go away', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const provider = await buildProvider();
+    const conn = provider.signalingConns[0];
+
+    provider.awareness.states.set('peer-a', {});
+    provider.awareness.emit('change');
+
+    provider.awareness.states.delete('peer-a');
+    provider.awareness.emit('change');
+
+    conn.send({ type: 'publish', topic: 'room', data: 'a' });
+    conn.send({ type: 'publish', topic: 'room', data: 'b' });
+
+    expect(conn.sendCalls.length).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(conn.sendCalls.length).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(conn.sendCalls.length).toBe(2);
+  });
 });
