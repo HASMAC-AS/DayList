@@ -1148,12 +1148,20 @@ export const useDaylistStore = defineStore('daylist', () => {
         .slice(0, max);
     }
 
-    return candidates.map(({ item }) => ({
-      ...item,
-      usageLabel: item.usageCount ? `- used ${item.usageCount}x` : '',
-      lastLabel: item.lastUsedAt ? `- last ${formatDateTime(item.lastUsedAt)}` : '',
-      timeLabel: `- ~${pad2(Math.floor(item.meanMinutes / 60))}:${pad2(Math.round(item.meanMinutes % 60))}`
-    }));
+    const seen = new Set<string>();
+    return candidates
+      .filter(({ item }) => {
+        const key = String(item.title || '').trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(({ item }) => ({
+        ...item,
+        usageLabel: item.usageCount ? `- used ${item.usageCount}x` : '',
+        lastLabel: item.lastUsedAt ? `- last ${formatDateTime(item.lastUsedAt)}` : '',
+        timeLabel: `- ~${pad2(Math.floor(item.meanMinutes / 60))}:${pad2(Math.round(item.meanMinutes % 60))}`
+      }));
   };
 
   const initApp = async () => {
