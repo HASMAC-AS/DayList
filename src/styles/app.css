@@ -618,7 +618,7 @@ h1 {
 .barrel-track {
   display: flex;
   width: 300%;
-  transform: translateX(-100%);
+  transform: translateX(-33.3333%);
   transition: none;
 }
 
@@ -629,6 +629,8 @@ h1 {
 .barrel-pane {
   flex: 0 0 33.3333%;
   width: 33.3333%;
+  padding: 0 8px;
+  box-sizing: border-box;
 }
 
 .barrel-pane.inactive {
