@@ -93,6 +93,24 @@
     </div>
 
     <div class="settings-block log-block">
+      <div class="section-title">PWA lifecycle (iOS)</div>
+      <div class="log-actions">
+        <button class="chip ghost" type="button" @click="store.clearDiagnosticsLog">Clear</button>
+      </div>
+      <div v-if="iosLifecycleEntries.length === 0" class="empty">No lifecycle events yet.</div>
+      <div v-else ref="iosLogEl" class="log-stream">
+        <div v-for="entry in iosLifecycleEntries" :key="entry.id" class="log-entry">
+          <div class="log-meta">
+            <span class="log-time">{{ formatTime(entry.ts) }}</span>
+            <span class="log-level" :class="entry.level.toLowerCase()">{{ entry.level }}</span>
+            <span class="log-event">{{ entry.event }}</span>
+          </div>
+          <pre class="log-data">{{ formatData(entry.data) }}</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-block log-block">
       <div class="section-title">Live log</div>
       <div class="log-actions">
         <button class="chip ghost" type="button" @click="store.clearDiagnosticsLog">Clear</button>
@@ -119,6 +137,7 @@ import { useDaylistStore } from '../stores/daylist';
 
 const store = useDaylistStore();
 const logEl = ref<HTMLElement | null>(null);
+const iosLogEl = ref<HTMLElement | null>(null);
 const buildId = BUILD_ID;
 const buildTime = BUILD_TIME;
 
@@ -134,9 +153,53 @@ const signalingRows = computed(() => {
   return Object.values(store.signalingStatus).sort((a, b) => a.url.localeCompare(b.url));
 });
 
+const getReason = (data: unknown) => {
+  if (!data || typeof data !== 'object') return '';
+  if (!('reason' in data)) return '';
+  return String((data as { reason?: unknown }).reason ?? '');
+};
+
+const isIosLifecycleEvent = (entry: { event: string; data: unknown }) => {
+  const event = entry.event || '';
+  if (event.startsWith('lifecycle:')) return true;
+  if (event.startsWith('sync:resume_')) return true;
+  if (event.startsWith('sync:kick_')) return true;
+  if (event === 'sync:hard_reconnect') {
+    const reason = getReason(entry.data);
+    return (
+      reason.startsWith('resume:') ||
+      reason.startsWith('kick:') ||
+      reason.includes('visibility') ||
+      reason.includes('pagehide') ||
+      reason.includes('pageshow') ||
+      reason.includes('focus') ||
+      reason.includes('network')
+    );
+  }
+  if (event === 'network:online' || event === 'network:offline') return true;
+  if (event.includes('ios')) return true;
+  return false;
+};
+
+const iosLifecycleEntries = computed(() => {
+  return store.logEntries.filter((entry) => isIosLifecycleEvent(entry));
+});
+
+const logTimeFormatter = new Intl.DateTimeFormat('en-US', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  fractionalSecondDigits: 3,
+  hour12: false,
+  timeZoneName: 'short'
+});
+
 const formatTime = (ts: number) => {
   const d = new Date(ts);
-  return d.toLocaleTimeString();
+  return logTimeFormatter.format(d);
 };
 
 const formatData = (data: unknown) => {
@@ -148,17 +211,21 @@ const formatData = (data: unknown) => {
   }
 };
 
-const scrollToBottom = () => {
-  if (!logEl.value) return;
-  logEl.value.scrollTop = logEl.value.scrollHeight;
+const scrollToBottom = (el: HTMLElement | null) => {
+  if (!el) return;
+  el.scrollTop = el.scrollHeight;
 };
 
-onMounted(scrollToBottom);
+onMounted(() => {
+  scrollToBottom(logEl.value);
+  scrollToBottom(iosLogEl.value);
+});
 watch(
   () => store.logEntries.length,
   async () => {
     await nextTick();
-    scrollToBottom();
+    scrollToBottom(logEl.value);
+    scrollToBottom(iosLogEl.value);
   }
 );
 </script>
