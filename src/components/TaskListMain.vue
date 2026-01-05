@@ -11,7 +11,7 @@
           v-for="pane in panes"
           :key="pane.slot"
           class="barrel-pane"
-          :class="{ inactive: !pane.active }"
+          :class="{ inactive: !pane.active, incoming: pane.incoming, outgoing: pane.outgoing }"
         >
           <div id="todayList" class="task-list">
             <div
@@ -64,11 +64,17 @@ const trackOffset = ref(-1);
 const isAnimating = ref(false);
 const pendingCenter = ref<string | null>(null);
 const panes = ref<
-  Array<{ slot: 'left' | 'center' | 'right'; id: string | null; active: boolean }>
+  Array<{
+    slot: 'left' | 'center' | 'right';
+    id: string | null;
+    active: boolean;
+    incoming: boolean;
+    outgoing: boolean;
+  }>
 >([
-  { slot: 'left', id: null, active: false },
-  { slot: 'center', id: null, active: true },
-  { slot: 'right', id: null, active: false }
+  { slot: 'left', id: null, active: false, incoming: false, outgoing: false },
+  { slot: 'center', id: null, active: true, incoming: false, outgoing: false },
+  { slot: 'right', id: null, active: false, incoming: false, outgoing: false }
 ]);
 
 const listIds = computed(() => store.lists.map((list) => list.id));
@@ -79,9 +85,9 @@ const setPanesForCenter = (centerId: string) => {
   const left = index > 0 ? listIds.value[index - 1] : null;
   const right = index >= 0 && index < listIds.value.length - 1 ? listIds.value[index + 1] : null;
   panes.value = [
-    { slot: 'left', id: left, active: false },
-    { slot: 'center', id: centerId, active: true },
-    { slot: 'right', id: right, active: false }
+    { slot: 'left', id: left, active: false, incoming: false, outgoing: false },
+    { slot: 'center', id: centerId, active: true, incoming: false, outgoing: false },
+    { slot: 'right', id: right, active: false, incoming: false, outgoing: false }
   ];
 };
 
@@ -95,9 +101,9 @@ const setPanesForTransition = (fromId: string, toId: string, direction: 'forward
         ? listIds.value[fromIndex + 1]
         : null;
   panes.value = [
-    { slot: 'left', id: left, active: false },
-    { slot: 'center', id: fromId, active: true },
-    { slot: 'right', id: right, active: false }
+    { slot: 'left', id: left, active: false, incoming: direction === 'back', outgoing: false },
+    { slot: 'center', id: fromId, active: true, incoming: false, outgoing: true },
+    { slot: 'right', id: right, active: false, incoming: direction === 'forward', outgoing: false }
   ];
 };
 
