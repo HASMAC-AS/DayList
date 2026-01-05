@@ -225,6 +225,7 @@ header {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding-right: 6px;
 }
 
 .list-dot {
