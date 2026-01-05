@@ -123,6 +123,30 @@ header {
   gap: 10px;
 }
 
+.list-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.header-actions .list-picker {
+  width: auto;
+}
+
+.list-picker select {
+  flex: 1;
+  width: auto;
+  min-width: 140px;
+}
+
+.list-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -307,6 +331,26 @@ h1 {
   box-shadow: var(--shadow);
 }
 
+.list-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.list-items {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.list-row {
+  align-items: center;
+}
+
+.list-row .pill {
+  margin-left: auto;
+}
+
 .diagnostics-view {
   display: flex;
   flex-direction: column;
@@ -482,7 +526,8 @@ h1 {
 
 input[type='text'],
 input[type='password'],
-input[type='datetime-local'] {
+input[type='datetime-local'],
+select {
   width: 100%;
   padding: 10px 12px;
   border-radius: 12px;
@@ -508,7 +553,17 @@ textarea {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-input:focus {
+input[type='color'] {
+  width: 44px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-soft-2);
+}
+
+input:focus,
+select:focus {
   border-color: rgba(37, 99, 235, 0.4);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }

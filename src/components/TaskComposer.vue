@@ -14,6 +14,20 @@
       </div>
     </div>
 
+    <div class="row">
+      <div class="col grow">
+        <div class="hint">List</div>
+        <div class="list-picker">
+          <span class="list-dot" :style="{ background: selectedColor }" aria-hidden="true"></span>
+          <select v-model="listId" aria-label="Task list">
+            <option v-for="list in store.lists" :key="list.id" :value="list.id">
+              {{ list.name }}
+            </option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <div class="typeRow">
       <label class="radio">
         <input id="typeDaily" v-model="type" type="radio" name="t" value="daily" />
@@ -48,6 +62,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import SuggestionsList from './SuggestionsList.vue';
 import type { TaskType, TemplateStat } from '../lib/types';
+import { DEFAULT_LIST_COLOR } from '../lib/lists';
 import { useDaylistStore } from '../stores/daylist';
 
 const emit = defineEmits<{ close: []; added: [] }>();
@@ -57,10 +72,16 @@ const store = useDaylistStore();
 const title = ref('');
 const type = ref<TaskType>('scheduled');
 const dueInput = ref('');
+const listId = ref(store.activeListId || '');
 const rootRef = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLInputElement | null>(null);
 
-const suggestions = computed(() => store.buildSuggestions(title.value.trim()));
+const selectedColor = computed(() => {
+  const list = store.lists.find((item) => item.id === listId.value);
+  return list?.color || DEFAULT_LIST_COLOR;
+});
+
+const suggestions = computed(() => store.buildSuggestions(title.value.trim(), { listId: listId.value }));
 
 const ensureInputVisible = () => {
   const input = inputRef.value;
@@ -88,7 +109,8 @@ const handleAdd = () => {
   store.addTask({
     title: title.value,
     type: type.value,
-    dueAt
+    dueAt,
+    listId: listId.value
   });
 
   title.value = '';
@@ -132,4 +154,13 @@ watch(
 onMounted(() => {
   ensureDefaultDue();
 });
+
+watch(
+  () => store.activeListId,
+  (id) => {
+    if (!listId.value || !store.lists.find((list) => list.id === listId.value)) {
+      listId.value = id || '';
+    }
+  }
+);
 </script>

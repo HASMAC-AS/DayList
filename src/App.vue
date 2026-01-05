@@ -1,5 +1,13 @@
 <template>
   <div class="wrap">
+    <AppHeader
+      :view="view"
+      :lists="store.lists"
+      :active-list-id="store.activeListId"
+      @open-settings="view = 'settings'"
+      @back="handleBack"
+      @select-list="store.setActiveList"
+    />
 
     <transition name="view-fade" mode="out-in">
       <div v-if="view === 'main'" key="main" class="main-view">
@@ -20,15 +28,6 @@
 
   <button v-if="view === 'main'" class="fab" type="button" aria-label="Add task" @click="openComposer">
     +
-  </button>
-  <button
-    class="fab fab-left"
-    type="button"
-    :aria-label="view === 'main' ? 'Open settings' : 'Back'"
-    @click="handleBack"
-  >
-    <Settings v-if="view === 'main'" class="fab-icon" aria-hidden="true" />
-    <span v-else>&larr;</span>
   </button>
 
   <transition name="composer">
@@ -51,12 +50,12 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
-import { Settings } from 'lucide-vue-next';
 import TaskComposer from './components/TaskComposer.vue';
 import TaskListMain from './components/TaskListMain.vue';
 import SettingsView from './components/SettingsView.vue';
 import DiagnosticsView from './components/DiagnosticsView.vue';
 import ToastHost from './components/ToastHost.vue';
+import AppHeader from './components/AppHeader.vue';
 import { useDaylistStore } from './stores/daylist';
 
 const store = useDaylistStore();

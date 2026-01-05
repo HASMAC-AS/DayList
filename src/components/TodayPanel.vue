@@ -76,5 +76,5 @@ import HistoryPanel from './HistoryPanel.vue';
 
 const store = useDaylistStore();
 
-const sections = computed(() => buildTodaySections(store.tasks, store.nowTs));
+const sections = computed(() => buildTodaySections(store.tasksForActiveList, store.nowTs));
 </script>

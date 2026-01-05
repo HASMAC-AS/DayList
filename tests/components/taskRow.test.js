@@ -4,6 +4,7 @@ import TaskRow from '../../src/components/TaskRow.vue';
 
 const buildTask = (overrides = {}) => ({
   id: 'task-1',
+  listId: 'default',
   title: 'Morning run',
   type: 'daily',
   createdAt: Date.now(),

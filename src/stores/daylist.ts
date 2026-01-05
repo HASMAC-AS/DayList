@@ -19,7 +19,26 @@ import {
   toDatetimeLocalValue,
   toJsonSafe
 } from '../lib/core';
-import type { HistoryDay, Task, TaskType, TemplateStat, SnapshotV1, SnapshotV2, SnapshotKeys } from '../lib/types';
+import {
+  DEFAULT_LIST_COLOR,
+  DEFAULT_LIST_ID,
+  DEFAULT_LIST_NAME,
+  TEMPLATE_SEP,
+  buildTemplateId,
+  parseTemplateId
+} from '../lib/lists';
+import type {
+  HistoryDay,
+  HistoryDayEntry,
+  Task,
+  TaskList,
+  TaskType,
+  TemplateStat,
+  SnapshotV1,
+  SnapshotV2,
+  SnapshotV3,
+  SnapshotKeys
+} from '../lib/types';
 import { createDebugLogger, bindDebugWindow, type DebugLogger } from '../services/sync/debugLog';
 import { getIceServers } from '../services/sync/meteredTurn';
 import { createRateLimitedFetch } from '../services/sync/netThrottle';
@@ -40,6 +59,7 @@ const HISTORY_DAYS = 7;
 const TURN_UPGRADE_DELAY_MS = 800;
 const TURN_SIGNAL_GRACE_MS = 800;
 const TURN_MAX_WAIT_MS = 4000;
+const ACTIVE_LIST_KEY = 'daylist.activeListId.v1';
 
 export const useDaylistStore = defineStore('daylist', () => {
   // iOS Safari (and iOS PWAs) aggressively suspend pages in the background.
@@ -77,6 +97,16 @@ export const useDaylistStore = defineStore('daylist', () => {
   const peerCount = ref(0);
   const idbReady = ref(false);
   const nowTs = ref(Date.now());
+  const lists = ref<TaskList[]>([]);
+  const activeListId = ref(
+    (() => {
+      try {
+        return localStorage.getItem(ACTIVE_LIST_KEY) || DEFAULT_LIST_ID;
+      } catch {
+        return DEFAULT_LIST_ID;
+      }
+    })()
+  );
   const tasks = ref<Task[]>([]);
   const templates = ref<TemplateStat[]>([]);
   const historyDays = ref<HistoryDay[]>([]);
@@ -141,9 +171,11 @@ export const useDaylistStore = defineStore('daylist', () => {
 
   const isTaskSyncing = (id: string) => pendingTaskIds.value.includes(id);
 
-  const nextTaskOrder = () => {
+  const nextTaskOrder = (listId?: string) => {
+    const target = listId || activeListIdResolved.value;
     let max = 0;
     tasks.value.forEach((task) => {
+      if (target && task.listId !== target) return;
       const value = task.order == null ? task.createdAt || 0 : Number(task.order || 0);
       if (value > max) max = value;
     });
@@ -151,6 +183,18 @@ export const useDaylistStore = defineStore('daylist', () => {
   };
 
   const { show: toast } = useToastBus();
+
+  const activeList = computed(() => {
+    if (!lists.value.length) return null;
+    return (
+      lists.value.find((list) => list.id === activeListId.value) ||
+      lists.value.find((list) => list.id === DEFAULT_LIST_ID) ||
+      lists.value[0] ||
+      null
+    );
+  });
+  const activeListIdResolved = computed(() => activeList.value?.id || activeListId.value || DEFAULT_LIST_ID);
+  const tasksForActiveList = computed(() => tasks.value.filter((task) => task.listId === activeListIdResolved.value));
 
   const dayKey = computed(() => logicalDayKey(nowTs.value));
   const dayLabel = computed(() => `Day: ${dayKey.value} (resets ${pad2(BOUNDARY_HOUR)}:00 local)`);
@@ -160,6 +204,55 @@ export const useDaylistStore = defineStore('daylist', () => {
   const ensureTask = (id: string) => {
     const ytask = ydocHandles.value?.yTasks.get(id);
     return ytask instanceof Y.Map ? ytask : null;
+  };
+
+  const ensureList = (id: string) => {
+    if (!ydocHandles.value) return null;
+    let ylist = ydocHandles.value.yLists.get(id);
+    if (!(ylist instanceof Y.Map)) {
+      ylist = new Y.Map();
+      ydocHandles.value.yLists.set(id, ylist);
+    }
+    return ylist;
+  };
+
+  const getList = (id: string) => {
+    const ylist = ydocHandles.value?.yLists.get(id);
+    return ylist instanceof Y.Map ? ylist : null;
+  };
+
+  const listPlain = (ylist: Y.Map<any>, id: string): TaskList => {
+    const metaRaw = ylist.get('meta');
+    const meta = metaRaw && typeof metaRaw === 'object' && !Array.isArray(metaRaw) ? metaRaw : undefined;
+    return {
+      id,
+      name: String(ylist.get('name') || (id === DEFAULT_LIST_ID ? DEFAULT_LIST_NAME : id)),
+      color: String(ylist.get('color') || DEFAULT_LIST_COLOR),
+      createdAt: Number(ylist.get('createdAt') || 0),
+      order: ylist.get('order') == null ? null : Number(ylist.get('order')),
+      archivedAt: ylist.get('archivedAt') == null ? null : Number(ylist.get('archivedAt')),
+      meta: meta && typeof meta === 'object' ? (meta as Record<string, any>) : undefined
+    };
+  };
+
+  const ensureListDefaults = (id: string) => {
+    const ylist = ensureList(id);
+    if (!ylist) return null;
+    if (!ylist.has('name')) ylist.set('name', id === DEFAULT_LIST_ID ? DEFAULT_LIST_NAME : id);
+    if (!ylist.has('color')) ylist.set('color', DEFAULT_LIST_COLOR);
+    if (!ylist.has('createdAt')) ylist.set('createdAt', Date.now());
+    return ylist;
+  };
+
+  const ensureDefaultList = () => {
+    ensureListDefaults(DEFAULT_LIST_ID);
+  };
+
+  const resolveListId = (id: string, available: TaskList[] = lists.value) => {
+    const trimmed = (id || '').trim() || DEFAULT_LIST_ID;
+    if (available.some((list) => list.id === trimmed)) return trimmed;
+    const fallback = available.find((list) => list.id === DEFAULT_LIST_ID) || available[0];
+    return fallback ? fallback.id : DEFAULT_LIST_ID;
   };
 
   const ensureMapField = (ytask: Y.Map<any>, field: string) => {
@@ -178,14 +271,23 @@ export const useDaylistStore = defineStore('daylist', () => {
     return m;
   };
 
-  const touchTemplate = (title: string, typeHint: TaskType = 'daily', dueAt: number | null = null) => {
+  const touchTemplate = (
+    listId: string,
+    title: string,
+    typeHint: TaskType = 'daily',
+    dueAt: number | null = null
+  ) => {
     const key = normalizeTitle(title);
     if (!key || !ydocHandles.value) return null;
+    const listKey = (listId || DEFAULT_LIST_ID).trim() || DEFAULT_LIST_ID;
+    const templateId = buildTemplateId(listKey, key);
 
-    let yt = ydocHandles.value.yTemplates.get(key);
+    ensureListDefaults(listKey);
+
+    let yt = ydocHandles.value.yTemplates.get(templateId);
     if (!(yt instanceof Y.Map)) {
       yt = new Y.Map();
-      ydocHandles.value.yTemplates.set(key, yt);
+      ydocHandles.value.yTemplates.set(templateId, yt);
       yt.set('title', title.trim());
       yt.set('usageCount', 0);
       yt.set('firstUsedAt', Date.now());
@@ -203,7 +305,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     const alpha = 0.2;
     yt.set('meanMinutes', mean * (1 - alpha) + usedMinutes * alpha);
 
-    return key;
+    return templateId;
   };
 
   const taskPlain = (ytask: Y.Map<any>): Task => {
@@ -217,6 +319,7 @@ export const useDaylistStore = defineStore('daylist', () => {
 
     return {
       id: String(ytask.get('id') || ''),
+      listId: String(ytask.get('listId') || DEFAULT_LIST_ID),
       title: String(ytask.get('title') || ''),
       type: String(ytask.get('type') || 'daily') as TaskType,
       createdAt: Number(ytask.get('createdAt') || 0),
@@ -230,7 +333,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     };
   };
 
-  const buildHistoryDays = (daysBack = HISTORY_DAYS) => {
+  const buildHistoryDays = (listId: string | null = null, daysBack = HISTORY_DAYS) => {
     if (!ydocHandles.value) return [] as HistoryDay[];
     const out: HistoryDay[] = [];
     const now = nowTs.value;
@@ -241,15 +344,26 @@ export const useDaylistStore = defineStore('daylist', () => {
       const entries = m instanceof Y.Map ? [...m.entries()] : [];
       entries.sort((a, b) => Number(a[1]) - Number(b[1]));
 
-      const items = entries.map(([taskId, completedAt]) => {
-        const ytask = ydocHandles.value?.yTasks.get(taskId);
-        const title = ytask instanceof Y.Map ? String(ytask.get('title') || '(untitled)') : '(missing task)';
-        return {
-          taskId,
-          completedAt: Number(completedAt || 0),
-          title
-        };
-      });
+      const items = entries
+        .map(([taskId, completedAt]) => {
+          const ytask = ydocHandles.value?.yTasks.get(taskId);
+          if (!(ytask instanceof Y.Map)) {
+            return {
+              taskId,
+              completedAt: Number(completedAt || 0),
+              title: '(missing task)'
+            };
+          }
+          const taskListId = String(ytask.get('listId') || DEFAULT_LIST_ID);
+          if (listId && taskListId !== listId) return null;
+          const title = String(ytask.get('title') || '(untitled)');
+          return {
+            taskId,
+            completedAt: Number(completedAt || 0),
+            title
+          };
+        })
+        .filter((entry): entry is HistoryDayEntry => !!entry);
 
       out.push({
         dayKey: key,
@@ -263,6 +377,18 @@ export const useDaylistStore = defineStore('daylist', () => {
   const rebuildDerivedState = () => {
     if (!ydocHandles.value) return;
 
+    const listList: TaskList[] = [];
+    ydocHandles.value.yLists.forEach((ylist, id) => {
+      if (!(ylist instanceof Y.Map)) return;
+      listList.push(listPlain(ylist, id));
+    });
+    listList.sort((a, b) => {
+      const aOrder = a.order == null ? a.createdAt || 0 : Number(a.order || 0);
+      const bOrder = b.order == null ? b.createdAt || 0 : Number(b.order || 0);
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+
     const taskList: Task[] = [];
     ydocHandles.value.yTasks.forEach((ytask) => {
       if (!(ytask instanceof Y.Map)) return;
@@ -272,9 +398,11 @@ export const useDaylistStore = defineStore('daylist', () => {
     const templateList: TemplateStat[] = [];
     ydocHandles.value.yTemplates.forEach((yt, key) => {
       if (!(yt instanceof Y.Map)) return;
+      const parsed = parseTemplateId(String(key));
       templateList.push({
-        key,
-        title: String(yt.get('title') || key),
+        key: String(key),
+        listId: parsed.listId,
+        title: String(yt.get('title') || parsed.baseKey || key),
         usageCount: Number(yt.get('usageCount') || 0),
         firstUsedAt: Number(yt.get('firstUsedAt') || 0),
         lastUsedAt: Number(yt.get('lastUsedAt') || 0),
@@ -283,9 +411,68 @@ export const useDaylistStore = defineStore('daylist', () => {
       });
     });
 
+    lists.value = listList;
     tasks.value = taskList;
     templates.value = templateList;
-    historyDays.value = buildHistoryDays();
+    const resolvedActive = resolveListId(activeListId.value, listList);
+    if (resolvedActive !== activeListId.value) {
+      activeListId.value = resolvedActive;
+      try {
+        localStorage.setItem(ACTIVE_LIST_KEY, resolvedActive);
+      } catch {
+        // ignore
+      }
+    }
+    historyDays.value = buildHistoryDays(resolvedActive);
+  };
+
+  const migrateMultiList = () => {
+    if (!ydocHandles.value) return;
+
+    const { ydoc, yTasks, yTemplates } = ydocHandles.value;
+    ydoc.transact(() => {
+      ensureDefaultList();
+      const listIds = new Set<string>([DEFAULT_LIST_ID]);
+
+      yTasks.forEach((ytask) => {
+        if (!(ytask instanceof Y.Map)) return;
+        const current = ytask.get('listId');
+        const listId = String(current || DEFAULT_LIST_ID).trim() || DEFAULT_LIST_ID;
+        if (current == null || String(current) !== listId) ytask.set('listId', listId);
+        listIds.add(listId);
+
+        const templateKey = ytask.get('templateKey');
+        if (templateKey != null) {
+          const keyStr = String(templateKey);
+          if (!keyStr.includes(TEMPLATE_SEP)) {
+            ytask.set('templateKey', buildTemplateId(listId, keyStr));
+          }
+        }
+      });
+
+      const legacyTemplates: Array<{ key: string; yt: Y.Map<any> }> = [];
+      yTemplates.forEach((yt, key) => {
+        if (!(yt instanceof Y.Map)) return;
+        const keyStr = String(key);
+        if (!keyStr.includes(TEMPLATE_SEP)) {
+          legacyTemplates.push({ key: keyStr, yt });
+          listIds.add(DEFAULT_LIST_ID);
+          return;
+        }
+        const parsed = parseTemplateId(keyStr);
+        listIds.add(parsed.listId);
+      });
+
+      legacyTemplates.forEach(({ key, yt }) => {
+        const newKey = buildTemplateId(DEFAULT_LIST_ID, key);
+        if (!yTemplates.has(newKey)) yTemplates.set(newKey, yt);
+        yTemplates.delete(key);
+      });
+
+      listIds.forEach((id) => {
+        ensureListDefaults(id);
+      });
+    });
   };
 
   const updateSyncBadge = () => {
@@ -647,10 +834,84 @@ export const useDaylistStore = defineStore('daylist', () => {
     }
   };
 
-  const addTask = (input: { title: string; type: TaskType; dueAt: number | null }) => {
+  const setActiveList = (id: string) => {
+    const nextId = resolveListId(id);
+    if (nextId === activeListId.value) return;
+    activeListId.value = nextId;
+    try {
+      localStorage.setItem(ACTIVE_LIST_KEY, nextId);
+    } catch {
+      // ignore
+    }
+    historyDays.value = buildHistoryDays(nextId);
+  };
+
+  const createList = (input: { name: string; color?: string; meta?: Record<string, any> }) => {
+    if (!ydocHandles.value) return '';
+    const name = String(input.name || '').trim();
+    if (!name) return '';
+    const color = String(input.color || DEFAULT_LIST_COLOR).trim() || DEFAULT_LIST_COLOR;
+    const id = crypto.randomUUID();
+
+    ydocHandles.value.ydoc.transact(() => {
+      const ylist = ensureList(id);
+      if (!ylist) return;
+      ylist.set('name', name);
+      ylist.set('color', color);
+      ylist.set('createdAt', Date.now());
+      ylist.set('order', lists.value.length);
+      if (input.meta && typeof input.meta === 'object') {
+        ylist.set('meta', toJsonSafe(input.meta));
+      }
+    });
+
+    snapshotMirror.value?.flush('createList', true);
+    return id;
+  };
+
+  const updateList = (id: string, patch: Partial<TaskList>) => {
+    if (!ydocHandles.value) return;
+    const ylist = getList(id);
+    if (!ylist) return;
+
+    ydocHandles.value.ydoc.transact(() => {
+      if (patch.name != null) {
+        const name = String(patch.name || '').trim();
+        if (name) ylist.set('name', name);
+      }
+      if (patch.color != null) {
+        const color = String(patch.color || '').trim();
+        if (color) ylist.set('color', color);
+      }
+      if (patch.order !== undefined) ylist.set('order', patch.order == null ? null : Number(patch.order));
+      if (patch.archivedAt !== undefined) {
+        ylist.set('archivedAt', patch.archivedAt == null ? null : Number(patch.archivedAt));
+      }
+      if (patch.meta !== undefined) {
+        if (patch.meta && typeof patch.meta === 'object') {
+          ylist.set('meta', toJsonSafe(patch.meta));
+        }
+      }
+    });
+
+    snapshotMirror.value?.flush('updateList', true);
+  };
+
+  const renameList = (id: string, name: string) => {
+    updateList(id, { name });
+  };
+
+  const setListColor = (id: string, color: string) => {
+    updateList(id, { color });
+  };
+
+  const addTask = (input: { title: string; type: TaskType; dueAt: number | null; listId?: string }) => {
     if (!ydocHandles.value) return;
     const title = input.title.trim();
     if (!title) return;
+
+    const listId = resolveListId(input.listId || activeListId.value);
+    ensureListDefaults(listId);
 
     let dueAt = input.dueAt;
     if (input.type !== 'scheduled') {
@@ -663,16 +924,17 @@ export const useDaylistStore = defineStore('daylist', () => {
     ydocHandles.value.ydoc.transact(() => {
       const ytask = new Y.Map();
       ytask.set('id', id);
+      ytask.set('listId', listId);
       ytask.set('title', title);
       ytask.set('type', input.type);
       ytask.set('createdAt', Date.now());
-      ytask.set('order', nextTaskOrder());
+      ytask.set('order', nextTaskOrder(listId));
       ytask.set('dueAt', dueAt);
       ytask.set('active', true);
       ytask.set('archivedAt', null);
       ytask.set('doneAt', null);
       ytask.set('completions', new Y.Map());
-      ytask.set('templateKey', touchTemplate(title, input.type, dueAt));
+      ytask.set('templateKey', touchTemplate(listId, title, input.type, dueAt));
       ydocHandles.value?.yTasks.set(id, ytask);
     });
 
@@ -729,8 +991,9 @@ export const useDaylistStore = defineStore('daylist', () => {
       if (!ytask) return;
       ytask.set('title', title);
       const type = String(ytask.get('type') || 'daily') as TaskType;
+      const listId = String(ytask.get('listId') || DEFAULT_LIST_ID);
       const dueAt = ytask.get('dueAt') == null ? null : Number(ytask.get('dueAt'));
-      ytask.set('templateKey', touchTemplate(title, type, dueAt));
+      ytask.set('templateKey', touchTemplate(listId, title, type, dueAt));
     });
 
     snapshotMirror.value?.flush('renameTask', true);
@@ -759,9 +1022,9 @@ export const useDaylistStore = defineStore('daylist', () => {
   const exportJson = () => {
     if (!ydocHandles.value) return '';
     const snapshot = exportSnapshot(ydocHandles.value, { historyDays: 999999 });
-    const backup: SnapshotV2 = {
+    const backup: SnapshotV3 = {
       ...snapshot,
-      v: 2,
+      v: 3,
       keys: {
         room: keys.room,
         enc: keys.enc,
@@ -773,10 +1036,10 @@ export const useDaylistStore = defineStore('daylist', () => {
     return JSON.stringify(backup, null, 2);
   };
 
-  const importJson = async (snapshot: SnapshotV1 | SnapshotV2) => {
+  const importJson = async (snapshot: SnapshotV1 | SnapshotV2 | SnapshotV3) => {
     if (!ydocHandles.value) return;
-    if (snapshot && snapshot.v === 2 && (snapshot as SnapshotV2).keys) {
-      const nextKeys = (snapshot as SnapshotV2).keys as SnapshotKeys;
+    if (snapshot && (snapshot.v === 2 || snapshot.v === 3) && (snapshot as SnapshotV2 | SnapshotV3).keys) {
+      const nextKeys = (snapshot as SnapshotV2 | SnapshotV3).keys as SnapshotKeys;
       keys.room = nextKeys.room || keys.room;
       keys.enc = nextKeys.enc || keys.enc;
       keys.sig = nextKeys.sig || keys.sig;
@@ -798,7 +1061,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       });
     }
 
-    const baseSnapshot: SnapshotV1 =
+    const baseSnapshot: SnapshotV1 | SnapshotV3 =
       snapshot && snapshot.v === 2
         ? {
             v: 1,
@@ -807,11 +1070,11 @@ export const useDaylistStore = defineStore('daylist', () => {
             templates: snapshot.templates,
             history: snapshot.history
           }
-        : (snapshot as SnapshotV1);
+        : (snapshot as SnapshotV1 | SnapshotV3);
 
     importSnapshot(ydocHandles.value, baseSnapshot);
     snapshotMirror.value?.flush('importSnapshot', true);
-    if (snapshot && snapshot.v === 2 && (snapshot as SnapshotV2).keys) {
+    if (snapshot && (snapshot.v === 2 || snapshot.v === 3) && (snapshot as SnapshotV2 | SnapshotV3).keys) {
       await connectSync();
     }
   };
@@ -835,6 +1098,8 @@ export const useDaylistStore = defineStore('daylist', () => {
       }
 
       localStorage.removeItem('daylist.snapshot.v1');
+      localStorage.removeItem('daylist.snapshot.v3');
+      localStorage.removeItem(ACTIVE_LIST_KEY);
       localStorage.removeItem('daylist.meteredIceCache.v1');
 
       if (ydocHandles.value.persistence?.clearData) {
@@ -855,9 +1120,11 @@ export const useDaylistStore = defineStore('daylist', () => {
     }
   };
 
-  const buildSuggestions = (query: string, max = 6) => {
+  const buildSuggestions = (query: string, opts: { listId?: string; max?: number } = {}) => {
     const now = Date.now();
-    const list = templates.value.slice();
+    const listId = resolveListId(opts.listId || activeListId.value);
+    const max = opts.max ?? 6;
+    const list = templates.value.filter((item) => item.listId === listId);
     const fuse = new Fuse(list, {
       keys: ['title'],
       includeScore: true,
@@ -922,7 +1189,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       });
 
       idbReady.value = true;
-      logEvent('idb:ready', { at: doc.idbSyncedAt.value, counts: { tasks: doc.yTasks.size } });
+      logEvent('idb:ready', { at: doc.idbSyncedAt.value, counts: { lists: doc.yLists.size, tasks: doc.yTasks.size } });
 
       try {
         const prev = await doc.persistence.get?.('meta:lastRunAt');
@@ -939,13 +1206,20 @@ export const useDaylistStore = defineStore('daylist', () => {
 
     const snapshot = loadSnapshotFromStorage(localStorage);
     if (snapshot) {
+      const templateCount =
+        snapshot.v === 3
+          ? Object.values(snapshot.templates || {}).reduce((sum, list) => sum + (list ? Object.keys(list).length : 0), 0)
+          : snapshot.templates
+            ? Object.keys(snapshot.templates).length
+            : 0;
       logEvent('snapshot:boot_found', {
         bytes: JSON.stringify(snapshot).length,
         exportedAt: snapshot.exportedAt,
         v: snapshot.v,
         snapshotCounts: {
+          lists: snapshot.v === 3 && snapshot.lists ? Object.keys(snapshot.lists).length : 0,
           tasks: snapshot.tasks?.length || 0,
-          templates: snapshot.templates ? Object.keys(snapshot.templates).length : 0,
+          templates: templateCount,
           historyDays: snapshot.history ? Object.keys(snapshot.history).length : 0
         }
       });
@@ -954,6 +1228,8 @@ export const useDaylistStore = defineStore('daylist', () => {
     } else {
       logEvent('snapshot:boot_none');
     }
+
+    migrateMultiList();
 
     snapshotMirror.value = createSnapshotMirror({
       doc,
@@ -964,6 +1240,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       onToast: toast,
       onLog: logEvent
     });
+    snapshotMirror.value.flush('boot', true);
 
     doc.ydoc.on('update', (update, origin) => {
       snapshotMirror.value?.markDirty();
@@ -982,7 +1259,12 @@ export const useDaylistStore = defineStore('daylist', () => {
       logEvent('ydoc:update', {
         updateBytes: update?.length ?? null,
         origin: originName,
-        counts: { tasks: doc.yTasks.size, templates: doc.yTemplates.size, historyDays: doc.yHistory.size }
+        counts: {
+          lists: doc.yLists.size,
+          tasks: doc.yTasks.size,
+          templates: doc.yTemplates.size,
+          historyDays: doc.yHistory.size
+        }
       });
 
       rebuildDerivedState();
@@ -1002,6 +1284,7 @@ export const useDaylistStore = defineStore('daylist', () => {
         tr.changed.forEach((subs, type) => {
           const keyCount = subs?.size ?? 0;
           let typeName = type?.constructor?.name || 'Type';
+          if (type === doc.yLists) typeName = 'yLists';
           if (type === doc.yTasks) typeName = 'yTasks';
           if (type === doc.yTemplates) typeName = 'yTemplates';
           if (type === doc.yHistory) typeName = 'yHistory';
@@ -1037,7 +1320,7 @@ export const useDaylistStore = defineStore('daylist', () => {
 
     setInterval(() => {
       nowTs.value = Date.now();
-      historyDays.value = buildHistoryDays();
+      historyDays.value = buildHistoryDays(activeListId.value);
     }, 30_000);
 
     toast('Ready');
@@ -1142,7 +1425,11 @@ export const useDaylistStore = defineStore('daylist', () => {
     peerCount,
     idbReady,
     nowTs,
+    lists,
+    activeListId,
+    activeList,
     tasks,
+    tasksForActiveList,
     templates,
     historyDays,
     usingTurn,
@@ -1157,6 +1444,11 @@ export const useDaylistStore = defineStore('daylist', () => {
     initialized,
     initApp,
     connectSync,
+    setActiveList,
+    createList,
+    updateList,
+    renameList,
+    setListColor,
     addTask,
     reorderTasks,
     toggleCompletion,

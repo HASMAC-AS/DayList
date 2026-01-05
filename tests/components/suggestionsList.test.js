@@ -4,7 +4,8 @@ import SuggestionsList from '../../src/components/SuggestionsList.vue';
 
 const items = [
   {
-    key: 'drink-water',
+    key: 'default::drink-water',
+    listId: 'default',
     title: 'Drink water',
     usageCount: 3,
     firstUsedAt: 0,
@@ -24,6 +25,6 @@ describe('SuggestionsList', () => {
     });
 
     await wrapper.find('.sugg').trigger('click');
-    expect(wrapper.emitted('pick')[0][0].key).toBe('drink-water');
+    expect(wrapper.emitted('pick')[0][0].key).toBe('default::drink-water');
   });
 });
