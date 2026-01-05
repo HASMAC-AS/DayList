@@ -63,6 +63,7 @@ export async function connectProvider(opts: {
   const resyncPending = new Map<string, { reason: string; attempts: number }>();
   const lastResyncAt = new Map<string, number>();
   const hookedPeers = new Set<string>();
+  const connectedPeers = new Set<string>();
   const connSend = new WeakMap<SignalingConn, (message: unknown) => void>();
   let staleInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -432,7 +433,12 @@ export async function connectProvider(opts: {
 
     if (webrtcList.length > 0) {
       clearPeerIdleTimer();
-      setMode('steady', 'webrtc_peers');
+      connectedPeers.forEach((peerId) => {
+        if (!webrtcList.includes(peerId)) connectedPeers.delete(peerId);
+      });
+      if (connectedPeers.size > 0) {
+        setMode('steady', 'webrtc_connected');
+      }
     } else {
       schedulePeerIdleReset('webrtc_empty');
     }
@@ -448,10 +454,14 @@ export async function connectProvider(opts: {
         hookedPeers.add(peerId);
         try {
           peer.on('connect', () => {
+            connectedPeers.add(peerId);
             opts.onLog?.('webrtc:peer_connected', { peerId });
             requestResync(peerId, 'peer_connect');
+            clearPeerIdleTimer();
+            setMode('steady', 'webrtc_connected');
           });
           peer.on('close', () => {
+            connectedPeers.delete(peerId);
             hookedPeers.delete(peerId);
             opts.onLog?.('webrtc:peer_closed', { peerId });
           });
