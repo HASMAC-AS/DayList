@@ -164,4 +164,19 @@ describe('signaling throttling', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(conn.sendCalls.length).toBe(2);
   });
+
+  it('does not throttle announce messages after peer discovery', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const provider = await buildProvider();
+    const conn = provider.signalingConns[0];
+
+    conn.emit('message', [{ type: 'subscribe', from: 'peer-a', topics: ['room'] }]);
+
+    conn.send({ type: 'publish', topic: 'room', data: { type: 'announce', from: 'peer-b' } });
+    conn.send({ type: 'publish', topic: 'room', data: { type: 'announce', from: 'peer-c' } });
+
+    expect(conn.sendCalls.length).toBe(2);
+  });
 });

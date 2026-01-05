@@ -39,11 +39,13 @@ export async function connectProvider(opts: {
   const PRE_PEER_INTERVAL_MS = 1000;
   const POST_PEER_INTERVAL_MS = 30_000;
   const PEER_STALE_MS = 30_000;
+  const PEER_IDLE_RESET_MS = 15_000;
   const PEER_URGENT_MS = 5 * 60 * 1000;
   const URGENT_BURST_COUNT = 3;
   const MESSAGE_SYNC = 0;
   const MESSAGE_AWARENESS = 1;
   const MESSAGE_QUERY_AWARENESS = 3;
+  const DISCOVERY_TYPES = new Set(['signal', 'announce']);
 
   const sendQueue: Array<() => void> = [];
   let sendTimer: ReturnType<typeof setTimeout> | null = null;
@@ -54,6 +56,7 @@ export async function connectProvider(opts: {
   let priorityRemaining = 0;
   let peerSeen = false;
   let peerSeenAt = 0;
+  let peerIdleTimer: ReturnType<typeof setTimeout> | null = null;
   const peerLastSeen = new Map<string, number>();
   const pendingPeers = new Set<string>();
   const urgentPeers = new Set<string>();
@@ -104,6 +107,26 @@ export async function connectProvider(opts: {
       sendTimer = null;
     }
     startPump();
+  };
+
+  const clearPeerIdleTimer = () => {
+    if (peerIdleTimer != null) {
+      clearTimeout(peerIdleTimer);
+      peerIdleTimer = null;
+    }
+  };
+
+  const schedulePeerIdleReset = (reason: string) => {
+    if (peerIdleTimer != null) return;
+    peerIdleTimer = setTimeout(() => {
+      peerIdleTimer = null;
+      if (computeHasPeer()) return;
+      if (!peerDiscovered) return;
+      peerDiscovered = false;
+      opts.onLog?.('signal:peer_idle_reset', { reason, afterMs: PEER_IDLE_RESET_MS });
+      resetSendTimer();
+    }, PEER_IDLE_RESET_MS);
+    opts.onLog?.('signal:peer_idle_scheduled', { reason, afterMs: PEER_IDLE_RESET_MS });
   };
 
   const grantPriorityBurst = (reason: string) => {
@@ -173,8 +196,9 @@ export async function connectProvider(opts: {
     if (msg.type && msg.type !== 'publish') return true;
     if (msg.type !== 'publish') return false;
     if (msg.topic !== opts.room) return false;
+    const isDiscoveryType = (value: unknown) => typeof value === 'string' && DISCOVERY_TYPES.has(value);
     if (msg.data && typeof msg.data === 'object') {
-      return (msg.data as { type?: string }).type === 'signal';
+      return isDiscoveryType((msg.data as { type?: string }).type);
     }
     if (typeof msg.data !== 'string') return false;
     const looksBase64 =
@@ -183,7 +207,7 @@ export async function connectProvider(opts: {
     return decryptSignalPayload(msg.data)
       .then((decrypted) => {
         if (!decrypted || typeof decrypted !== 'object') return false;
-        return (decrypted as { type?: string }).type === 'signal';
+        return isDiscoveryType((decrypted as { type?: string }).type);
       })
       .catch(() => true);
   };
@@ -349,6 +373,7 @@ export async function connectProvider(opts: {
   const updateHasPeer = (reason: string) => {
     const nowHasPeer = computeHasPeer();
     if (nowHasPeer) {
+      clearPeerIdleTimer();
       if (!peerConnected) {
         peerConnected = true;
         opts.onLog?.('signal:peer_connected', { reason });
@@ -365,10 +390,14 @@ export async function connectProvider(opts: {
       peerConnected = false;
       opts.onLog?.('signal:peer_lost', { reason });
     }
+    if (peerDiscovered) {
+      schedulePeerIdleReset(reason);
+    }
   };
 
   const markPeerSeen = (reason: string, detail?: unknown) => {
     if (peerSeen) return;
+    clearPeerIdleTimer();
     peerSeen = true;
     peerSeenAt = Date.now();
     if (!peerDiscovered) {
@@ -385,6 +414,7 @@ export async function connectProvider(opts: {
       clearInterval(staleInterval);
       staleInterval = null;
     }
+    clearPeerIdleTimer();
     return originalDestroy();
   };
 
