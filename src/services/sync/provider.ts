@@ -191,35 +191,47 @@ export async function connectProvider(opts: {
     return decoding.readAny(decoding.createDecoder(new Uint8Array(decrypted)));
   };
 
-  const sanitizeSignalMessage = (message: unknown) => {
-    if (!message || typeof message !== 'object') return message;
-    const msg = message as { type?: string; data?: unknown };
-    if (msg.type === 'publish' && typeof msg.data === 'string') {
-      return { ...msg, data: '[encrypted]' };
+  const logSignal = (
+    direction: 'send' | 'recv',
+    conn: SignalingConn,
+    message: unknown,
+    extra?: Record<string, unknown>
+  ) => {
+    const base = {
+      url: conn.url,
+      ...(extra || {})
+    };
+    if (!message || typeof message !== 'object') {
+      opts.onLog?.(`signal:${direction}`, { ...base, message });
+      return;
     }
-    return message;
-  };
-
-  const logDecrypted = (direction: 'send' | 'recv', url: string, message: unknown) => {
-    if (!opts.debugSignaling) return;
-    if (!message || typeof message !== 'object') return;
-    const msg = message as { type?: string; data?: unknown; from?: string; to?: string; topic?: string };
-    if (msg.type !== 'publish' || typeof msg.data !== 'string') return;
-    if (msg.topic && msg.topic !== opts.room) return;
+    const msg = message as { type?: string; data?: unknown; topic?: string };
+    const isPublish = msg.type === 'publish';
+    const dataIsString = typeof msg.data === 'string';
+    if (!isPublish || !dataIsString) {
+      opts.onLog?.(`signal:${direction}`, { ...base, message: msg });
+      return;
+    }
+    if (msg.topic && msg.topic !== opts.room) {
+      opts.onLog?.(`signal:${direction}`, { ...base, message: { ...msg, data: null } });
+      return;
+    }
     decryptSignalPayload(msg.data)
       .then((decrypted) => {
-        if (decrypted == null) return;
-        opts.onLog?.(`signal:${direction}_decrypted`, {
-          url,
-          from: msg.from,
-          to: msg.to,
-          decrypted
-        });
+        if (decrypted == null) {
+          opts.onLog?.(
+            `signal:${direction}_decrypt_failed`,
+            { ...base, message: { ...msg, data: null }, reason: 'missing_key' },
+            'WARN'
+          );
+          return;
+        }
+        opts.onLog?.(`signal:${direction}`, { ...base, message: { ...msg, data: decrypted } });
       })
       .catch((error) => {
         opts.onLog?.(
           `signal:${direction}_decrypt_failed`,
-          { url, topic: msg.topic, error: errToObj(error) },
+          { ...base, message: { ...msg, data: null }, error: errToObj(error) },
           'WARN'
         );
       });
@@ -229,13 +241,7 @@ export async function connectProvider(opts: {
     const send =
       connSend.get(conn) ||
       ((conn as SignalingConn & { __dlSend?: (message: unknown) => void }).__dlSend || null);
-    opts.onLog?.('signal:send', {
-      url: conn.url,
-      message: sanitizeSignalMessage(message),
-      intervalMs: currentInterval(),
-      mode
-    });
-    logDecrypted('send', conn.url, message);
+    logSignal('send', conn, message, { intervalMs: currentInterval(), mode });
     if (send) send(message);
   };
 
@@ -511,8 +517,7 @@ export async function connectProvider(opts: {
     });
     conn.on('message', (message: unknown) => {
       updateStatus();
-      opts.onLog?.('signal:recv', { url: conn.url, message: sanitizeSignalMessage(message) });
-      logDecrypted('recv', conn.url, message);
+      logSignal('recv', conn, message);
       if (!message || typeof message !== 'object') return;
       const msg = message as {
         type?: string;
