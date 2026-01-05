@@ -1,46 +1,58 @@
 <template>
   <header>
-    <div class="brand">
-      <div class="logo" aria-hidden="true">OK</div>
-      <div>
-        <h1>DayList</h1>
-      </div>
-    </div>
-
     <div class="header-actions">
       <div v-if="lists.length" class="list-picker">
-        <span class="list-dot" :style="{ background: activeColor }" aria-hidden="true"></span>
-        <select :value="activeListId" aria-label="Active list" @change="onSelect">
-          <option v-for="list in lists" :key="list.id" :value="list.id">
-            {{ list.name }}
-          </option>
-        </select>
+        <Multiselect
+          :model-value="activeListId"
+          :options="options"
+          :searchable="false"
+          :can-clear="false"
+          value-prop="value"
+          label="label"
+          track-by="value"
+          aria-label="Active list"
+          @update:model-value="onSelect"
+        >
+          <template #singlelabel="{ value }">
+            <span class="list-label">
+              <span class="list-dot" :style="{ background: value?.color || DEFAULT_LIST_COLOR }" aria-hidden="true"></span>
+              <span class="list-label-text">{{ value?.label || 'List' }}</span>
+            </span>
+          </template>
+          <template #option="{ option }">
+            <span class="list-option">
+              <span class="list-dot" :style="{ background: option.color }" aria-hidden="true"></span>
+              <span class="list-label-text">{{ option.label }}</span>
+            </span>
+          </template>
+        </Multiselect>
       </div>
-      <button v-if="view !== 'main'" class="back-btn" type="button" @click="$emit('back')">Back</button>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import Multiselect from '@vueform/multiselect';
 import type { TaskList } from '../lib/types';
 import { DEFAULT_LIST_COLOR } from '../lib/lists';
 
 const props = defineProps<{
-  view: 'main' | 'settings' | 'diagnostics';
   lists: TaskList[];
   activeListId: string;
 }>();
-const emit = defineEmits<{ back: []; selectList: [string] }>();
+const emit = defineEmits<{ selectList: [string] }>();
 
-const activeColor = computed(() => {
-  const list = props.lists.find((item) => item.id === props.activeListId);
-  return list?.color || DEFAULT_LIST_COLOR;
-});
+const options = computed(() =>
+  props.lists.map((list) => ({
+    value: list.id,
+    label: list.name,
+    color: list.color || DEFAULT_LIST_COLOR
+  }))
+);
 
-const onSelect = (event: Event) => {
-  const target = event.target as HTMLSelectElement | null;
-  if (!target) return;
-  emit('selectList', target.value);
+const onSelect = (value: string | { value: string } | null) => {
+  if (!value) return;
+  emit('selectList', typeof value === 'string' ? value : value.value);
 };
 </script>

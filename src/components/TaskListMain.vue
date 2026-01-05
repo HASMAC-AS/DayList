@@ -1,6 +1,6 @@
 <template>
   <div class="main-list">
-    <transition-group id="todayList" name="task-slide" tag="div" class="task-list">
+    <transition-group id="todayList" :name="transitionName" tag="div" class="task-list barrel-list">
       <div
         v-for="task in tasks"
         :key="task.id"
@@ -34,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { logicalDayKey } from '../lib/core';
 import { useDaylistStore } from '../stores/daylist';
 import TaskRow from './TaskRow.vue';
@@ -44,6 +44,9 @@ const dayKey = computed(() => logicalDayKey(store.nowTs));
 const draggingId = ref<string | null>(null);
 const dragOverId = ref<string | null>(null);
 const dropPosition = ref<'before' | 'after' | null>(null);
+const barrelDirection = ref(1);
+const lastListIndex = ref<number | null>(null);
+const transitionName = computed(() => (barrelDirection.value >= 0 ? 'task-barrel-forward' : 'task-barrel-back'));
 
 const tasks = computed(() => {
   const now = store.nowTs;
@@ -58,6 +61,30 @@ const tasks = computed(() => {
     .slice()
     .sort((a, b) => orderValue(a) - orderValue(b));
 });
+
+const getListIndex = (id: string) => store.lists.findIndex((list) => list.id === id);
+
+watch(
+  () => store.lists,
+  () => {
+    const index = getListIndex(store.activeListId);
+    if (index !== -1) lastListIndex.value = index;
+  },
+  { immediate: true }
+);
+
+watch(
+  () => store.activeListId,
+  (nextId, prevId) => {
+    const nextIndex = getListIndex(nextId);
+    const prevIndex = prevId ? getListIndex(prevId) : lastListIndex.value;
+    if (nextIndex !== -1 && prevIndex != null && prevIndex !== -1 && nextIndex !== prevIndex) {
+      barrelDirection.value = nextIndex > prevIndex ? 1 : -1;
+    }
+    lastListIndex.value = nextIndex;
+  },
+  { flush: 'sync' }
+);
 
 const onDragStart = (event: DragEvent, id: string) => {
   draggingId.value = id;

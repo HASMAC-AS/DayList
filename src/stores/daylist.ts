@@ -199,6 +199,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const dayKey = computed(() => logicalDayKey(nowTs.value));
   const dayLabel = computed(() => `Day: ${dayKey.value} (resets ${pad2(BOUNDARY_HOUR)}:00 local)`);
   const snapshotActive = computed(() => !!snapshotMirror.value);
+  const syncReady = computed(() => providerConnected.value && peerCount.value > 0 && pendingTaskIds.value.length === 0 && initialized.value);
   const throttledFetch = createRateLimitedFetch(fetch, 300);
 
   const ensureTask = (id: string) => {
@@ -1441,6 +1442,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     dayKey,
     dayLabel,
     snapshotActive,
+    syncReady,
     initialized,
     initApp,
     connectSync,
