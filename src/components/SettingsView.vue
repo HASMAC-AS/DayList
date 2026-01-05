@@ -128,6 +128,7 @@ const reloadApp = () => {
   persistKeysToStorage(localStorage, store.keys);
   writeKeysToUrl(store.keys);
   window.setTimeout(() => {
+    window.location.href = window.location.href;
     window.location.reload();
   }, 50);
 };
