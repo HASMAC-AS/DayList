@@ -165,8 +165,9 @@ header {
   --ms-ring-color: var(--focus-ring);
   --ms-radius: 999px;
   --ms-font-size: 0.95rem;
-  --ms-px: 1rem;
-  --ms-py: 0.5rem;
+  --ms-px: 0.7rem;
+  --ms-py: 0.4rem;
+  --ms-font-size: 0.9rem;
   --ms-placeholder-color: var(--muted2);
   --ms-dropdown-bg: var(--panel);
   --ms-dropdown-border-color: var(--border);
@@ -581,8 +582,6 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  perspective: 1200px;
-  perspective-origin: 50% 50%;
   position: relative;
 }
 
@@ -601,44 +600,29 @@ h1 {
   transform: translateX(-20px);
 }
 
-.task-barrel-forward-enter-active,
-.task-barrel-forward-leave-active,
-.task-barrel-back-enter-active,
-.task-barrel-back-leave-active {
-  transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.45s ease;
-  transform-style: preserve-3d;
+.barrel-shell {
+  position: relative;
+  overflow: hidden;
 }
 
-.task-barrel-forward-enter-from {
-  opacity: 0;
-  transform: translateX(80px) skewX(-6deg) scale(0.98);
-}
-
-.task-barrel-forward-leave-to {
-  opacity: 0;
-  transform: translateX(-80px) skewX(6deg) scale(0.98);
-}
-
-.task-barrel-back-enter-from {
-  opacity: 0;
-  transform: translateX(-80px) skewX(6deg) scale(0.98);
-}
-
-.task-barrel-back-leave-to {
-  opacity: 0;
-  transform: translateX(80px) skewX(-6deg) scale(0.98);
-}
-
-.task-barrel-forward-move,
-.task-barrel-back-move {
+.barrel-track {
+  display: flex;
+  width: 300%;
+  transform: translateX(-100%);
   transition: none;
 }
 
-.task-barrel-forward-leave-active,
-.task-barrel-back-leave-active {
-  position: absolute;
-  left: 0;
-  right: 0;
+.barrel-track.animating {
+  transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.barrel-pane {
+  flex: 0 0 100%;
+  width: 100%;
+}
+
+.barrel-pane.inactive {
+  pointer-events: none;
 }
 
 .grow {
