@@ -184,6 +184,35 @@ watch(listColor, (color) => {
   applyListTheme(color);
 }, { immediate: true });
 
+let stopComposerViewport: (() => void) | null = null;
+
+const startComposerViewportTracking = () => {
+  const root = document.documentElement;
+  const update = () => {
+    const vv = window.visualViewport;
+    const height = vv?.height ?? window.innerHeight;
+    const offsetTop = vv?.offsetTop ?? 0;
+    root.style.setProperty('--composer-vh', `${height}px`);
+    root.style.setProperty('--composer-offset-top', `${offsetTop}px`);
+  };
+  update();
+  const vv = window.visualViewport;
+  if (vv) {
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+  }
+  window.addEventListener('orientationchange', update);
+  return () => {
+    if (vv) {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    }
+    window.removeEventListener('orientationchange', update);
+    root.style.removeProperty('--composer-vh');
+    root.style.removeProperty('--composer-offset-top');
+  };
+};
+
 watch(composerOpen, (open) => {
   const body = document.body;
   if (!body) return;
@@ -192,11 +221,15 @@ watch(composerOpen, (open) => {
     body.dataset.scrollY = String(scrollY);
     body.classList.add('modal-open');
     body.style.top = `-${scrollY}px`;
+    stopComposerViewport?.();
+    stopComposerViewport = startComposerViewportTracking();
   } else {
     const y = Number(body.dataset.scrollY || '0');
     body.classList.remove('modal-open');
     body.style.top = '';
     window.scrollTo(0, y);
+    stopComposerViewport?.();
+    stopComposerViewport = null;
   }
 });
 

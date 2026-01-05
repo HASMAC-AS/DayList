@@ -1194,12 +1194,18 @@ details .bd {
 
 .composer-overlay {
   position: fixed;
-  inset: 0;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--composer-vh, 100dvh);
+  transform: translateY(var(--composer-offset-top, 0px));
   background: rgba(15, 23, 42, 0.4);
   display: flex;
   align-items: flex-end;
   justify-content: center;
   padding: 24px;
+  padding-top: calc(24px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
   z-index: 1100;
 }
 
@@ -1210,6 +1216,11 @@ details .bd {
   box-shadow: 0 30px 60px rgba(15, 23, 42, 0.25);
   padding: 18px 18px 20px;
   transform-origin: bottom right;
+  max-height: calc(
+    var(--composer-vh, 100dvh) - 48px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+  );
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .composer-head {

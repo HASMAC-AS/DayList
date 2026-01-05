@@ -9,6 +9,7 @@
           type="text"
           placeholder="e.g., Drink water / Meds / Stretch / Call dentist..."
           autocomplete="off"
+          @focus="ensureInputVisible"
           @keydown.enter.prevent="handleAdd"
         />
       </div>
@@ -45,6 +46,7 @@
           type="datetime-local"
           :disabled="type !== 'scheduled'"
           :style="{ opacity: type === 'scheduled' ? '1' : '0.55' }"
+          @focus="ensureInputVisible"
         />
       </div>
     </div>
