@@ -11,6 +11,7 @@
           label="label"
           track-by="value"
           aria-label="Active list"
+          :style="dropdownStyle"
           @update:model-value="onSelect"
         >
           <template #singlelabel="{ value }">
@@ -26,13 +27,14 @@
             </span>
           </template>
         </Multiselect>
+        <span ref="measureRef" class="list-measure">{{ selectedLabel }}</span>
       </div>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import Multiselect from '@vueform/multiselect';
 import type { TaskList } from '../lib/types';
 import { DEFAULT_LIST_COLOR } from '../lib/lists';
@@ -42,6 +44,8 @@ const props = defineProps<{
   activeListId: string;
 }>();
 const emit = defineEmits<{ selectList: [string] }>();
+const measureRef = ref<HTMLElement | null>(null);
+const dropdownWidth = ref<number | null>(null);
 
 const options = computed(() =>
   props.lists.map((list) => ({
@@ -50,6 +54,38 @@ const options = computed(() =>
     color: list.color || DEFAULT_LIST_COLOR
   }))
 );
+
+const selectedLabel = computed(() => {
+  const current = props.lists.find((list) => list.id === props.activeListId) || props.lists[0];
+  return current?.name || 'List';
+});
+
+const updateWidth = () => {
+  const labelWidth = measureRef.value?.getBoundingClientRect().width || 0;
+  const extra = 96;
+  const minWidth = 140;
+  const maxWidth = typeof window === 'undefined' ? labelWidth + extra : Math.max(minWidth, window.innerWidth - 64);
+  dropdownWidth.value = Math.min(maxWidth, Math.max(minWidth, Math.ceil(labelWidth + extra)));
+};
+
+const dropdownStyle = computed(() => {
+  if (!dropdownWidth.value) return undefined;
+  return { width: `${dropdownWidth.value}px` };
+});
+
+onMounted(() => {
+  updateWidth();
+  window.addEventListener('resize', updateWidth);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateWidth);
+});
+
+watch(selectedLabel, async () => {
+  await nextTick();
+  updateWidth();
+});
 
 const onSelect = (value: string | { value: string } | null) => {
   if (!value) return;
