@@ -32,6 +32,7 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
+  --ipad-top: 0px;
   --fab-bottom: calc(16px + var(--safe-bottom));
   --toast-bottom: calc(12px + var(--safe-bottom));
 }
@@ -102,7 +103,7 @@ body::before {
   min-height: 100dvh;
   min-height: -webkit-fill-available;
   padding:
-    calc(22px + var(--safe-top))
+    calc(22px + var(--safe-top) + var(--ipad-top))
     calc(16px + var(--safe-right))
     calc(60px + var(--safe-bottom))
     calc(16px + var(--safe-left));
@@ -736,7 +737,8 @@ button.danger {
 }
 
 .check {
-  display: flex;
+  position: relative;
+  display: inline-flex;
   align-items: flex-start;
   margin-top: 2px;
 }
@@ -745,6 +747,12 @@ button.danger {
   position: absolute;
   opacity: 0;
   pointer-events: none;
+}
+
+.check::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
 }
 
 .check span {
@@ -1092,6 +1100,12 @@ details .bd {
 .toast.show {
   opacity: 1;
   transform: translateX(-50%) translateY(-4px);
+}
+
+@media (min-width: 768px) and (max-width: 1366px) and (pointer: coarse) {
+  :root {
+    --ipad-top: 20px;
+  }
 }
 
 @media (prefers-color-scheme: dark) {
