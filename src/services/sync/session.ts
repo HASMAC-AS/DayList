@@ -1,7 +1,7 @@
 import type { WebrtcProvider } from 'y-webrtc';
 import { errToObj } from '../../lib/core';
 import { computeIceConfigs, iceKey, hasTurn, type IceConfig } from './icePolicy';
-import { connectProvider, type SignalingStatus } from './provider';
+import { connectProvider, type PeerConnectionUpdate, type SignalingStatus } from './provider';
 import { getIceServersFast, getStunFallback } from './meteredTurn';
 import type { YDocHandles } from './ydoc';
 
@@ -31,6 +31,7 @@ export async function createSyncSession(opts: {
   onAwarenessChange?: () => void;
   onSignalingStatus?: (s: SignalingStatus) => void;
   onPeerSeen?: (info: { peerId?: string; reason: string; at: number; detail?: unknown }) => void;
+  onPeerState?: (info: PeerConnectionUpdate) => void;
   onIce?: (info: { config: IceConfig; reason: string }) => void;
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
   debugSignaling?: boolean;
@@ -110,6 +111,9 @@ export async function createSyncSession(opts: {
       onPeerSeen: (info) => {
         lastPeerSeenAt = info.at;
         opts.onPeerSeen?.(info);
+      },
+      onPeerState: (info) => {
+        opts.onPeerState?.(info);
       },
       onLog: opts.onLog,
       debugSignaling: opts.debugSignaling

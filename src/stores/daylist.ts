@@ -41,7 +41,7 @@ import type {
 } from '../lib/types';
 import { createDebugLogger, bindDebugWindow, type DebugLogger } from '../services/sync/debugLog';
 import { createRateLimitedFetch } from '../services/sync/netThrottle';
-import { getPeerCount, type SignalingStatus } from '../services/sync/provider';
+import { getPeerCount, type PeerConnectionUpdate, type SignalingStatus } from '../services/sync/provider';
 import { createSyncSession, type SyncSession } from '../services/sync/session';
 import {
   createSnapshotMirror,
@@ -113,6 +113,31 @@ export const useDaylistStore = defineStore('daylist', () => {
   const signalingLastMessageAt = ref(0);
   const webrtcPeers = ref<string[]>([]);
   const bcPeers = ref<string[]>([]);
+  const peerStates = reactive<
+    Record<
+      string,
+      {
+        connected: boolean;
+        lastEvent: string;
+        lastChangeAt: number;
+        lastReason?: string;
+        lastOutcome?: string;
+        iceState?: string;
+        signalState?: string;
+        lastError?: unknown;
+      }
+    >
+  >({});
+  const iceState = ref<
+    | {
+        mode: string;
+        transport: string;
+        count: number;
+        reason: string;
+        at: number;
+      }
+    | null
+  >(null);
   const pendingTaskIds = ref<string[]>([]);
   const lastLocalChangeAt = ref(0);
   let lastKickAt = 0;
@@ -157,6 +182,26 @@ export const useDaylistStore = defineStore('daylist', () => {
   const logEvent = (event: string, data: unknown = null, level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' = 'INFO') => {
     pushLog(event, data, level);
     logger.value?.log(event, data, level);
+  };
+
+  const updatePeerState = (info: PeerConnectionUpdate) => {
+    if (!info.peerId) return;
+    if (!peerStates[info.peerId]) {
+      peerStates[info.peerId] = {
+        connected: false,
+        lastEvent: info.event || 'init',
+        lastChangeAt: info.at || Date.now()
+      };
+    }
+    const entry = peerStates[info.peerId];
+    if (typeof info.connected === 'boolean') entry.connected = info.connected;
+    if (info.event) entry.lastEvent = info.event;
+    entry.lastChangeAt = info.at || Date.now();
+    if (info.reason) entry.lastReason = info.reason;
+    if (info.outcome) entry.lastOutcome = info.outcome;
+    if (info.iceState !== undefined) entry.iceState = String(info.iceState);
+    if (info.signalState !== undefined) entry.signalState = String(info.signalState);
+    if (info.error) entry.lastError = errToObj(info.error);
   };
 
   const markTaskPending = (id: string) => {
@@ -624,6 +669,10 @@ export const useDaylistStore = defineStore('daylist', () => {
     providerConnected.value = false;
     webrtcPeers.value = [];
     bcPeers.value = [];
+    Object.keys(peerStates).forEach((peerId) => {
+      delete peerStates[peerId];
+    });
+    iceState.value = null;
     usingTurn.value = false;
     // Reset cached signaling connection state. On iOS Safari in particular the page can be
     // frozen/suspended without firing clean disconnect events, leaving stale \"connected\" flags
@@ -653,8 +702,25 @@ export const useDaylistStore = defineStore('daylist', () => {
         updateSyncBadge();
       },
       onPeers: (peers) => {
-        webrtcPeers.value = peers.webrtcPeers;
+        const nextWebrtc = Array.isArray(peers.webrtcPeers) ? peers.webrtcPeers : [];
+        const prevWebrtc = webrtcPeers.value.slice();
+        webrtcPeers.value = nextWebrtc;
         bcPeers.value = peers.bcPeers;
+        const now = Date.now();
+        nextWebrtc.forEach((peerId) => {
+          if (!peerStates[peerId]) {
+            peerStates[peerId] = {
+              connected: false,
+              lastEvent: 'peer_listed',
+              lastChangeAt: now
+            };
+          }
+        });
+        prevWebrtc
+          .filter((peerId) => !nextWebrtc.includes(peerId))
+          .forEach((peerId) => {
+            updatePeerState({ peerId, event: 'peer_removed', connected: false, at: now });
+          });
       },
       onAwarenessChange: () => {
         updateSyncBadge();
@@ -669,8 +735,18 @@ export const useDaylistStore = defineStore('daylist', () => {
       onPeerSeen: (info) => {
         signalingPeerSeenAt.value = info.at;
       },
+      onPeerState: (info) => {
+        updatePeerState(info);
+      },
       onIce: ({ config, reason }) => {
         usingTurn.value = config.mode !== 'stun';
+        iceState.value = {
+          mode: config.mode,
+          transport: config.transport,
+          count: config.iceServers.length,
+          reason,
+          at: Date.now()
+        };
         logEvent('ice:config', { reason, mode: config.mode, transport: config.transport, count: config.iceServers.length });
         if (reason.includes('user_connect')) {
           if (config.mode === 'stun') toast('Using STUN-only ICE');
@@ -1292,6 +1368,8 @@ export const useDaylistStore = defineStore('daylist', () => {
     signalingStatus,
     webrtcPeers,
     bcPeers,
+    peerStates,
+    iceState,
     logEntries,
     dayKey,
     dayLabel,

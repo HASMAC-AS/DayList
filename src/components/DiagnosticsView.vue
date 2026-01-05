@@ -232,6 +232,11 @@ const formatData = (data: unknown) => {
   }
 };
 
+const formatMaybeTime = (ts?: number) => {
+  if (!ts) return null;
+  return formatTime(ts);
+};
+
 const buildLogCopy = (
   entries: Array<{ ts: number; level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG'; event: string; data: unknown }>
 ) => {
@@ -244,10 +249,63 @@ const buildLogCopy = (
     .join('\n\n');
 };
 
+const buildSyncStateCopy = () => {
+  const signalingStatus = Object.values(store.signalingStatus)
+    .sort((a, b) => a.url.localeCompare(b.url))
+    .map((status) => ({
+      url: status.url,
+      connected: status.connected,
+      connecting: status.connecting,
+      lastMessageReceived: status.lastMessageReceived || 0,
+      lastMessageReceivedLabel: formatMaybeTime(status.lastMessageReceived)
+    }));
+
+  const peerEntries = Object.entries(store.peerStates).sort(([a], [b]) => a.localeCompare(b));
+  const peerStates = peerEntries.reduce(
+    (acc, [peerId, state]) => {
+      acc[peerId] = {
+        ...state,
+        lastChangeAtLabel: formatMaybeTime(state.lastChangeAt)
+      };
+      return acc;
+    },
+    {} as Record<string, unknown>
+  );
+
+  const connectedPeers = peerEntries.filter(([, state]) => state.connected).map(([peerId]) => peerId);
+  const disconnectedPeers = peerEntries.filter(([, state]) => !state.connected).map(([peerId]) => peerId);
+
+  return {
+    providerConnected: store.providerConnected,
+    peerCount: store.peerCount,
+    webrtcPeers: store.webrtcPeers,
+    bcPeers: store.bcPeers,
+    connectedPeers,
+    disconnectedPeers,
+    peerStates,
+    signaling: {
+      urls: store.signaling,
+      status: signalingStatus
+    },
+    turn: {
+      enabled: store.keys.turnEnabled,
+      usingTurn: store.usingTurn,
+      turnKeySet: !!store.keys.turnKey,
+      ice: store.iceState
+        ? {
+            ...store.iceState,
+            atLabel: formatMaybeTime(store.iceState.at)
+          }
+        : null
+    }
+  };
+};
+
 const buildDiagnosticsCopy = () => {
   const parts: string[] = [];
   const logText = store.logEntries.length ? buildLogCopy(store.logEntries) : '(empty)';
   parts.push('LIVE_LOG', logText);
+  parts.push('SYNC_STATE', JSON.stringify(buildSyncStateCopy(), null, 2));
   const state = store.exportJson();
   parts.push('APP_STATE', state || '(unavailable)');
   return parts.join('\n\n');
