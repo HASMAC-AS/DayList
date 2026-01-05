@@ -1104,7 +1104,7 @@ details .bd {
 
 @media (min-width: 409px) and (max-width: 1366px) and (pointer: coarse) {
   :root {
-    --ipad-top: 100px;
+    --ipad-top: 20px;
   }
 }
 
