@@ -620,7 +620,7 @@ h1 {
   width: 300%;
   transform: translateX(-33.3333%);
   transition: none;
-  --barrel-duration: 0.38s;
+  --barrel-duration: 0.5s;
   --barrel-ease: cubic-bezier(0.2, 0.85, 0.2, 1);
 }
 
@@ -651,7 +651,7 @@ h1 {
   0% {
     opacity: 1;
   }
-  66% {
+  90% {
     opacity: 0;
   }
   100% {
@@ -663,10 +663,10 @@ h1 {
   0% {
     opacity: 0;
   }
-  33% {
+  10% {
     opacity: 0;
   }
-  66% {
+  90% {
     opacity: 1;
   }
   100% {
