@@ -621,7 +621,7 @@ h1 {
   transform: translateX(-33.3333%);
   transition: none;
   --barrel-duration: 0.5s;
-  --barrel-ease: cubic-bezier(0.42, 0.0, 0.58, 1.0);
+  --barrel-ease: cubic-bezier(0.0, 0.0, 0.58, 1.0);
 }
 
 .barrel-track.animating {
@@ -663,10 +663,10 @@ h1 {
   0% {
     opacity: 0;
   }
-  70% {
+  10% {
     opacity: 0;
   }
-  90% {
+  20% {
     opacity: 1;
   }
   100% {
