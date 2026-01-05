@@ -42,6 +42,21 @@ const TURN_SIGNAL_GRACE_MS = 800;
 const TURN_MAX_WAIT_MS = 4000;
 
 export const useDaylistStore = defineStore('daylist', () => {
+  // iOS Safari (and iOS PWAs) aggressively suspend pages in the background.
+  // When the app resumes, WebRTC/WebSocket connections are often dead even if
+  // the in-memory objects still think they're "connected".
+  const isIOSLike = (() => {
+    try {
+      const ua = navigator.userAgent || '';
+      // iPadOS 13+ reports MacIntel but has touch points.
+      const platform = (navigator as Navigator & { platform?: string }).platform || '';
+      const maxTouchPoints = (navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints || 0;
+      return /iPad|iPhone|iPod/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1);
+    } catch {
+      return false;
+    }
+  })();
+
   const keys = reactive<SyncKeys>({
     room: '',
     enc: '',
@@ -77,6 +92,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   let stopVersionPoll: (() => void) | null = null;
   let resumeTimer: number | null = null;
   let lastResumeAt = 0;
+  let lastHiddenAt = 0;
   let watchdogTimer: number | null = null;
   let lastHardReconnectAt = 0;
   let lastOfflineAt = 0;
@@ -310,6 +326,14 @@ export const useDaylistStore = defineStore('daylist', () => {
     if (peerCount.value > 0) return;
     logEvent('sync:kick_signaling', { reason });
     try {
+      // Safari/iOS has a long history of half-open WebSocket/WebRTC state after a
+      // background/suspend. y-webrtc's disconnect/connect can leave sync stuck until
+      // a full reload, so force a provider restart instead.
+      if (isIOSLike) {
+        logEvent('sync:kick_ios_hard', { reason });
+        hardReconnect(`kick:${reason}`);
+        return;
+      }
       provider.value.disconnect();
       provider.value.connect();
     } catch (error) {
@@ -320,16 +344,32 @@ export const useDaylistStore = defineStore('daylist', () => {
 
   const resumeSync = (reason: string) => {
     if (!initialized.value) return;
-    const now = Date.now();
-    if (now - lastResumeAt < 2000) return;
-    lastResumeAt = now;
+    const calledAt = Date.now();
+    if (calledAt - lastResumeAt < 2000) return;
+    lastResumeAt = calledAt;
+
+    // If we just came back from the background, remember how long we were away.
+    // iOS often kills WebRTC/WebSocket connectivity while suspended.
+    const sleptMs = !document.hidden && lastHiddenAt ? Math.max(0, calledAt - lastHiddenAt) : 0;
+    if (!document.hidden && lastHiddenAt) lastHiddenAt = 0;
     if (resumeTimer != null) {
       window.clearTimeout(resumeTimer);
       resumeTimer = null;
     }
     resumeTimer = window.setTimeout(() => {
+      const now = Date.now();
       const age = signalingLastMessageAt.value ? now - signalingLastMessageAt.value : Infinity;
       const signalOk = hasSignalingConnection();
+      const staleSignal = signalingLastMessageAt.value > 0 && age > 25_000;
+
+      // iOS WebKit frequently resumes with half-open sockets / ICE state. This manifests as
+      // "Sync: on" but no updates until a full page reload. Force a full provider restart
+      // on resume from background, and also when signaling looks stale.
+      if (isIOSLike && (sleptMs > 0 || staleSignal)) {
+        logEvent('sync:resume_ios_hard', { reason, sleptMs, ageMs: age, staleSignal });
+        hardReconnect(`resume:${reason}`);
+        return;
+      }
       if (reason.includes('online') || reason.includes('network')) {
         hardReconnect(`resume:${reason}`);
         return;
@@ -411,6 +451,12 @@ export const useDaylistStore = defineStore('daylist', () => {
     signaling.value = sig;
     signalingPeerSeenAt.value = 0;
     signalingLastMessageAt.value = 0;
+    // Reset cached signaling connection state. On iOS Safari in particular the page can be
+    // frozen/suspended without firing clean disconnect events, leaving stale "connected" flags
+    // around that can trick our resume logic.
+    Object.keys(signalingStatus).forEach((url) => {
+      delete signalingStatus[url];
+    });
 
     const connectWithIce = async (iceServers: RTCIceServer[], context: string) => {
       const hasTurn = iceServers.some((server) => {
@@ -970,7 +1016,22 @@ export const useDaylistStore = defineStore('daylist', () => {
     });
 
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) resumeSync('visibility');
+      if (document.hidden) {
+        lastHiddenAt = Date.now();
+        logEvent('lifecycle:hidden', { at: lastHiddenAt });
+        // When iOS suspends the app it may not deliver clean disconnect events.
+        // Mark signaling timestamps stale so our resume logic doesn't trust cached state.
+        signalingLastMessageAt.value = 0;
+        signalingPeerSeenAt.value = 0;
+        return;
+      }
+      resumeSync('visibility');
+    });
+
+    // Some iOS transitions fire pagehide/pageshow instead of (or in addition to) visibility.
+    window.addEventListener('pagehide', (event) => {
+      lastHiddenAt = Date.now();
+      logEvent('lifecycle:pagehide', { at: lastHiddenAt, persisted: (event as PageTransitionEvent).persisted });
     });
     window.addEventListener('focus', () => resumeSync('focus'));
     window.addEventListener('online', () => {
