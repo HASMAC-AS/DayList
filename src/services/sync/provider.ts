@@ -34,11 +34,11 @@ export async function connectProvider(opts: {
   onPeerSeen?: (info: { peerId?: string; reason: string; at: number; detail?: unknown }) => void;
   onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
 }): Promise<WebrtcProvider> {
-  const STARTUP_BURST_COUNT = 3;
+  const STARTUP_BURST_COUNT = 10;
   const STARTUP_BURST_INTERVAL_MS = 100;
-  const PRE_PEER_INTERVAL_MS = 1000;
-  const POST_PEER_INTERVAL_MS = 30_000;
-  const PEER_STALE_MS = 30_000;
+  const PRE_PEER_INTERVAL_MS = 500;
+  const POST_PEER_INTERVAL_MS = 10_000;
+  const PEER_STALE_MS = 20_000;
   const PEER_IDLE_RESET_MS = 15_000;
   const PEER_URGENT_MS = 5 * 60 * 1000;
   const URGENT_BURST_COUNT = 3;
