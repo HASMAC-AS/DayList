@@ -5,6 +5,7 @@ import { errToObj } from '../../lib/core';
 export interface YDocHandles {
   ydoc: Y.Doc;
   yTasks: Y.Map<Y.Map<any>>;
+  yLists: Y.Map<Y.Map<any>>;
   yTemplates: Y.Map<Y.Map<any>>;
   yHistory: Y.Map<Y.Map<any>>;
   persistence: IndexeddbPersistence | null;
@@ -34,12 +35,14 @@ export function createYDoc(log?: YDocHandles['log']): YDocHandles {
   }
 
   const yTasks = ydoc.getMap<Y.Map<any>>('tasks');
+  const yLists = ydoc.getMap<Y.Map<any>>('lists');
   const yTemplates = ydoc.getMap<Y.Map<any>>('templates');
   const yHistory = ydoc.getMap<Y.Map<any>>('history');
 
   return {
     ydoc,
     yTasks,
+    yLists,
     yTemplates,
     yHistory,
     persistence,

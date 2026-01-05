@@ -49,7 +49,7 @@ const tasks = computed(() => {
   const now = store.nowTs;
   const orderValue = (task: { order?: number | null; createdAt: number }) =>
     task.order == null ? task.createdAt || 0 : Number(task.order || 0);
-  return store.tasks
+  return store.tasksForActiveList
     .filter((task) => {
       if (!task || task.archivedAt) return false;
       if (task.type === 'daily') return task.active !== false;

@@ -11,6 +11,7 @@ describe('today model persistence', () => {
     const tasks = [
       {
         id: 'daily-1',
+        listId: 'default',
         title: 'Daily workout',
         type: 'daily',
         active: true,
@@ -23,6 +24,7 @@ describe('today model persistence', () => {
       },
       {
         id: 'daily-2',
+        listId: 'default',
         title: 'Daily journal',
         type: 'daily',
         active: true,
@@ -35,6 +37,7 @@ describe('today model persistence', () => {
       },
       {
         id: 'scheduled-1',
+        listId: 'default',
         title: 'Pay rent',
         type: 'scheduled',
         active: true,
@@ -47,6 +50,7 @@ describe('today model persistence', () => {
       },
       {
         id: 'scheduled-2',
+        listId: 'default',
         title: 'Dentist appointment',
         type: 'scheduled',
         active: true,
