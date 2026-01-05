@@ -1,0 +1,23 @@
+instrversion: "3.9"
+
+services:
+  daylist-peer:
+    build:
+      context: .
+      dockerfile: Dockerfile.headless-peer
+    environment:
+      DAYLIST_ROOM: ${DAYLIST_ROOM:-}
+      DAYLIST_ENC: ${DAYLIST_ENC:-}
+      DAYLIST_SIG: ${DAYLIST_SIG:-}
+      DAYLIST_TURN_KEY: ${DAYLIST_TURN_KEY:-}
+      DAYLIST_TURN: ${DAYLIST_TURN:-1}
+      DAYLIST_PORT: ${DAYLIST_PORT:-4173}
+      DAYLIST_SETTINGS_FILE: ${DAYLIST_SETTINGS_FILE:-/data/settings.json}
+      DAYLIST_PROFILE_DIR: /data/chrome-profile
+    volumes:
+      - ${DAYLIST_SETTINGS_HOST_PATH:-./settings.json}:/data/settings.json:ro
+      - daylist-peer-data:/data
+    restart: unless-stopped
+
+volumes:
+  daylist-peer-data:

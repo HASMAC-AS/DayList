@@ -1,0 +1,14 @@
+FROM mcr.microsoft.com/playwright:v1.55.0-jammy
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+ENV DAYLIST_PORT=4173
+ENV DAYLIST_PROFILE_DIR=/data/chrome-profile
+VOLUME ["/data"]
+
+CMD ["node", "scripts/headless-peer.mjs"]

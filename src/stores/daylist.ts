@@ -51,10 +51,10 @@ import {
 } from '../services/sync/snapshot';
 import { createYDoc, type YDocHandles } from '../services/sync/ydoc';
 import { persistKeysToStorage, resolveInitialKeys, type SyncKeys, writeKeysToUrl } from '../services/sync/keys';
+import { DEFAULT_SIGNALING } from '../services/sync/defaults';
 import { useToastBus } from '../services/toast';
 import { startVersionPolling } from '../services/versionCheck';
 
-const DEFAULT_SIGNALING = ['wss://daylist-signaling.onrender.com/ws', 'wss://signaling.yjs.dev'];
 const HISTORY_DAYS = 7;
 const TURN_UPGRADE_DELAY_MS = 800;
 const TURN_SIGNAL_GRACE_MS = 800;

@@ -136,3 +136,21 @@ export function resolveInitialKeys(opts: {
   writeKeysToUrl(resolved);
   return resolved;
 }
+
+export function resolveKeysStrict(opts: { href: string; storage: Storage }): SyncKeys {
+  const fromUrl = readKeysFromUrl(opts.href);
+  const fromStorage = readKeysFromStorage(opts.storage);
+
+  const room = (fromUrl.room || fromStorage.room || '').trim();
+  const enc = (fromUrl.enc || fromStorage.enc || '').trim();
+  const sig = (fromUrl.sig || fromStorage.sig || '').trim();
+  const turnKey = (fromUrl.turnKey || fromStorage.turnKey || '').trim();
+  const turnEnabled = fromUrl.turnEnabled ?? fromStorage.turnEnabled ?? true;
+
+  if (!room) throw new Error('Missing required sync key: room');
+  if (!enc) throw new Error('Missing required sync key: enc');
+
+  const resolved = { room, enc, sig, turnKey, turnEnabled };
+  persistKeysToStorage(opts.storage, resolved);
+  return resolved;
+}

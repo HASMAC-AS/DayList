@@ -620,7 +620,7 @@ h1 {
   width: 300%;
   transform: translateX(-33.3333%);
   transition: none;
-  --barrel-duration: 0.5s;
+  --barrel-duration: 0.2s;
   --barrel-ease: cubic-bezier(0.0, 0.0, 0.58, 1.0);
 }
 

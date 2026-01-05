@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "peer:build": "npm run build",
+    "peer:run": "node scripts/headless-peer.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "playwright install --with-deps && npm run build && playwright test",
