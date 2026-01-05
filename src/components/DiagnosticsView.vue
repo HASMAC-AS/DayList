@@ -1,5 +1,5 @@
 <template>
-  <div class="diagnostics-view">
+  <div ref="rootEl" class="diagnostics-view">
     <div class="settings-block">
       <div class="section-title">Components</div>
       <div class="diag-grid">
@@ -26,6 +26,10 @@
         <div class="diag-item">
           <div class="diag-label">History days</div>
           <div class="diag-value">{{ store.historyDays.length }}</div>
+        </div>
+        <div class="diag-item">
+          <div class="diag-label">Diagnostics view size</div>
+          <div class="diag-value mono">{{ diagSizeLabel }}</div>
         </div>
         <div class="diag-item">
           <div class="diag-label">Build</div>
@@ -130,16 +134,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { redact } from '../lib/core';
 import { BUILD_ID, BUILD_TIME } from '../lib/build';
 import { useDaylistStore } from '../stores/daylist';
 
 const store = useDaylistStore();
+const rootEl = ref<HTMLElement | null>(null);
 const logEl = ref<HTMLElement | null>(null);
 const iosLogEl = ref<HTMLElement | null>(null);
 const buildId = BUILD_ID;
 const buildTime = BUILD_TIME;
+const diagSize = ref({ width: '-', height: '-' });
+let resizeObserver: ResizeObserver | null = null;
 
 const buildTimeLabel = computed(() => {
   if (!buildTime) return '-';
@@ -152,6 +159,17 @@ const redactedEnc = computed(() => redact(store.keys.enc || '', 4) || '-');
 const signalingRows = computed(() => {
   return Object.values(store.signalingStatus).sort((a, b) => a.url.localeCompare(b.url));
 });
+
+const updateDiagSize = () => {
+  if (!rootEl.value) return;
+  const styles = getComputedStyle(rootEl.value);
+  diagSize.value = {
+    width: styles.width || '-',
+    height: styles.height || '-'
+  };
+};
+
+const diagSizeLabel = computed(() => `${diagSize.value.width} × ${diagSize.value.height}`);
 
 const getReason = (data: unknown) => {
   if (!data || typeof data !== 'object') return '';
@@ -217,8 +235,24 @@ const scrollToBottom = (el: HTMLElement | null) => {
 };
 
 onMounted(() => {
+  updateDiagSize();
+  if (rootEl.value && 'ResizeObserver' in window) {
+    resizeObserver = new ResizeObserver(() => updateDiagSize());
+    resizeObserver.observe(rootEl.value);
+  } else {
+    window.addEventListener('resize', updateDiagSize);
+  }
   scrollToBottom(logEl.value);
   scrollToBottom(iosLogEl.value);
+});
+
+onBeforeUnmount(() => {
+  if (resizeObserver && rootEl.value) {
+    resizeObserver.unobserve(rootEl.value);
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  }
+  window.removeEventListener('resize', updateDiagSize);
 });
 watch(
   () => store.logEntries.length,
