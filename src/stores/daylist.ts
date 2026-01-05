@@ -56,6 +56,14 @@ export const useDaylistStore = defineStore('daylist', () => {
       return false;
     }
   })();
+  const isIPhone = (() => {
+    try {
+      const ua = navigator.userAgent || '';
+      return /iPhone/i.test(ua);
+    } catch {
+      return false;
+    }
+  })();
 
   const keys = reactive<SyncKeys>({
     room: '',
@@ -415,10 +423,10 @@ export const useDaylistStore = defineStore('daylist', () => {
     const hasRecentSignalPeer = () =>
       signalingPeerSeenAt.value > 0 && Date.now() - signalingPeerSeenAt.value < TURN_SIGNAL_GRACE_MS;
 
-    const maybeSkipTurn = (reason: string) => {
+    const maybeSkipSecondary = (reason: string) => {
       if (!turnUpgradeTimer) return false;
       if (!hasPeers()) return false;
-      logEvent('turn:skip_peers_present', {
+      logEvent('ice:secondary_skip_peers', {
         reason,
         peerCount: peerCount.value,
         webrtcPeers: webrtcPeers.value.length,
@@ -458,6 +466,31 @@ export const useDaylistStore = defineStore('daylist', () => {
       delete signalingStatus[url];
     });
 
+    const hasTurnServer = (iceServers: RTCIceServer[]) =>
+      iceServers.some((server) => {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        return urls.some((url) => typeof url === 'string' && (url.startsWith('turn:') || url.startsWith('turns:')));
+      });
+
+    const iceKey = (server: RTCIceServer) => {
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      return `${urls.join('|')}|${server.username || ''}|${String(server.credential || '')}`;
+    };
+
+    const mergeIceServers = (primary: RTCIceServer[], secondary: RTCIceServer[]) => {
+      const seen = new Set<string>();
+      const merged: RTCIceServer[] = [];
+      const addServer = (server: RTCIceServer) => {
+        const key = iceKey(server);
+        if (seen.has(key)) return;
+        seen.add(key);
+        merged.push(server);
+      };
+      primary.forEach(addServer);
+      secondary.forEach(addServer);
+      return merged;
+    };
+
     const connectWithIce = async (iceServers: RTCIceServer[], context: string) => {
       const hasTurn = iceServers.some((server) => {
         const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
@@ -478,20 +511,20 @@ export const useDaylistStore = defineStore('daylist', () => {
         provider.value = null;
       }
 
-    provider.value = await connectProvider({
-      doc: ydocHandles.value,
-      room,
-      enc,
-      signaling: sig,
-      iceServers,
-      onAwarenessChange: () => {
-        updateSyncBadge();
-        rebuildDerivedState();
-        maybeSkipTurn('awareness');
-      },
-      onPeerSeen: (info) => {
-        signalingPeerSeenAt.value = info.at;
-      },
+      provider.value = await connectProvider({
+        doc: ydocHandles.value,
+        room,
+        enc,
+        signaling: sig,
+        iceServers,
+        onAwarenessChange: () => {
+          updateSyncBadge();
+          rebuildDerivedState();
+          maybeSkipSecondary('awareness');
+        },
+        onPeerSeen: (info) => {
+          signalingPeerSeenAt.value = info.at;
+        },
         onStatus: () => {
           updateSyncBadge();
         },
@@ -501,27 +534,25 @@ export const useDaylistStore = defineStore('daylist', () => {
             signalingLastMessageAt.value = Math.max(signalingLastMessageAt.value, status.lastMessageReceived);
           }
         },
-      onPeers: (peers) => {
-        webrtcPeers.value = peers.webrtcPeers;
-        bcPeers.value = peers.bcPeers;
-        maybeSkipTurn('peers');
-      },
-      onLog: logEvent
-    });
+        onPeers: (peers) => {
+          webrtcPeers.value = peers.webrtcPeers;
+          bcPeers.value = peers.bcPeers;
+          maybeSkipSecondary('peers');
+        },
+        onLog: logEvent
+      });
 
       updateSyncBadge();
       logEvent('sync:provider_connected', { context, usingTurn: hasTurn });
 
-      if (context === 'turn' && !hasTurn && turnKey) toast('TURN fetch failed; staying STUN-only');
-      else if (context === 'turn' && hasTurn) toast('Using Metered TURN for ICE');
-      else toast('Using STUN-only ICE');
+      if (context === 'turn-primary' && !hasTurn && turnKey) toast('TURN fetch failed; staying STUN-only');
+      else if (context === 'turn-primary' && hasTurn) toast('Using TURN-first ICE');
+      else if (context === 'stun-primary') toast('Using STUN-only ICE');
     };
 
     clearTurnUpgradeTimer();
     turnUpgradeStartAt = 0;
-    let turnPrefetch: Promise<RTCIceServer[]> | null = null;
-
-    const stunOnlyIce = await getIceServers({
+    const stunOnlyPromise = getIceServers({
       turnKey,
       allowTurn: false,
       fetchFn: throttledFetch,
@@ -530,10 +561,10 @@ export const useDaylistStore = defineStore('daylist', () => {
       log: logEvent
     });
 
-    await connectWithIce(stunOnlyIce, 'stun');
-
+    let turnIce: RTCIceServer[] | null = null;
+    let turnHasTurn = false;
     if (turnKey && turnEnabled) {
-      turnPrefetch = getIceServers({
+      turnIce = await getIceServers({
         turnKey,
         allowTurn: true,
         fetchFn: throttledFetch,
@@ -541,69 +572,78 @@ export const useDaylistStore = defineStore('daylist', () => {
         now: () => Date.now(),
         log: logEvent
       });
+      turnHasTurn = hasTurnServer(turnIce);
+    }
 
-      const scheduleTurnUpgrade = (delayMs: number, reason: string) => {
+    const stunOnlyIce = await stunOnlyPromise;
+
+    if (turnIce && turnHasTurn) {
+      await connectWithIce(turnIce, 'turn-primary');
+    } else {
+      await connectWithIce(stunOnlyIce, 'stun-primary');
+    }
+
+    if (turnKey && turnEnabled) {
+      if (!turnIce || !turnHasTurn) return;
+
+      const secondaryIce = isIPhone ? stunOnlyIce : mergeIceServers(turnIce, stunOnlyIce);
+      const turnKeys = new Set(turnIce.map((server) => iceKey(server)));
+      const secondaryKeys = new Set(secondaryIce.map((server) => iceKey(server)));
+      const hasSecondaryDiff =
+        secondaryKeys.size !== turnKeys.size ||
+        Array.from(secondaryKeys).some((key) => !turnKeys.has(key));
+      const secondaryContext = isIPhone ? 'stun-secondary' : 'turn+stun-secondary';
+
+      if (!secondaryIce.length || !hasSecondaryDiff) {
+        logEvent('ice:secondary_skip_same', { target: secondaryContext });
+        return;
+      }
+
+      const scheduleSecondary = (delayMs: number, reason: string) => {
         clearTurnUpgradeTimer();
         if (!turnUpgradeStartAt) turnUpgradeStartAt = Date.now();
-        turnUpgradeTimer = window.setTimeout(runTurnUpgrade, delayMs);
-        logEvent('turn:upgrade_scheduled', { delayMs, reason });
+        turnUpgradeTimer = window.setTimeout(runSecondary, delayMs);
+        logEvent('ice:secondary_scheduled', { delayMs, reason, target: secondaryContext });
       };
 
-      const runTurnUpgrade = async () => {
+      const runSecondary = async () => {
         if (!turnUpgradeTimer) return;
         const now = Date.now();
         if (!turnUpgradeStartAt) turnUpgradeStartAt = now;
         if (hasRecentSignalPeer() && now - turnUpgradeStartAt < TURN_MAX_WAIT_MS) {
-          logEvent('turn:upgrade_delay_signal', {
+          logEvent('ice:secondary_delay_signal', {
             delayMs: TURN_SIGNAL_GRACE_MS,
-            seenMsAgo: now - signalingPeerSeenAt.value
+            seenMsAgo: now - signalingPeerSeenAt.value,
+            target: secondaryContext
           });
-          scheduleTurnUpgrade(TURN_SIGNAL_GRACE_MS, 'signal_recent');
+          scheduleSecondary(TURN_SIGNAL_GRACE_MS, 'signal_recent');
           return;
         }
-        logEvent('turn:upgrade_check', {
+        logEvent('ice:secondary_check', {
           delayMs: TURN_UPGRADE_DELAY_MS,
           peerCount: peerCount.value,
           webrtcPeers: webrtcPeers.value.length,
-          bcPeers: bcPeers.value.length
+          bcPeers: bcPeers.value.length,
+          target: secondaryContext
         });
         if (hasPeers()) {
-          logEvent('turn:skip_peers_present', {
+          logEvent('ice:secondary_skip_peers', {
             reason: 'delay_check',
             peerCount: peerCount.value,
             webrtcPeers: webrtcPeers.value.length,
-            bcPeers: bcPeers.value.length
+            bcPeers: bcPeers.value.length,
+            target: secondaryContext
           });
           clearTurnUpgradeTimer();
           return;
         }
 
-        const iceServers = await (turnPrefetch || getIceServers({
-          turnKey,
-          allowTurn: true,
-          fetchFn: throttledFetch,
-          storage: localStorage,
-          now: () => Date.now(),
-          log: logEvent
-        }));
-
-        if (hasPeers()) {
-          logEvent('turn:skip_peers_present', {
-            reason: 'post_fetch',
-            peerCount: peerCount.value,
-            webrtcPeers: webrtcPeers.value.length,
-            bcPeers: bcPeers.value.length
-          });
-          clearTurnUpgradeTimer();
-          return;
-        }
-
-        logEvent('turn:upgrade_connecting');
-        await connectWithIce(iceServers, 'turn');
+        logEvent('ice:secondary_connecting', { target: secondaryContext });
+        await connectWithIce(secondaryIce, secondaryContext);
         clearTurnUpgradeTimer();
       };
 
-      scheduleTurnUpgrade(TURN_UPGRADE_DELAY_MS, 'initial');
+      scheduleSecondary(TURN_UPGRADE_DELAY_MS, 'initial');
     }
   };
 
