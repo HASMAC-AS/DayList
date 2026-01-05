@@ -117,6 +117,7 @@
     <div class="settings-block log-block">
       <div class="section-title">Live log</div>
       <div class="log-actions">
+        <button class="chip ghost" type="button" @click="copyLiveLog">Copy</button>
         <button class="chip ghost" type="button" @click="store.clearDiagnosticsLog">Clear</button>
       </div>
       <div ref="logEl" class="log-stream">
@@ -138,8 +139,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { redact } from '../lib/core';
 import { BUILD_ID, BUILD_TIME } from '../lib/build';
 import { useDaylistStore } from '../stores/daylist';
+import { useToastBus } from '../services/toast';
 
 const store = useDaylistStore();
+const { show: toast } = useToastBus();
 const rootEl = ref<HTMLElement | null>(null);
 const logEl = ref<HTMLElement | null>(null);
 const iosLogEl = ref<HTMLElement | null>(null);
@@ -226,6 +229,37 @@ const formatData = (data: unknown) => {
     return JSON.stringify(data, null, 2);
   } catch {
     return String(data);
+  }
+};
+
+const buildLogCopy = (
+  entries: Array<{ ts: number; level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG'; event: string; data: unknown }>
+) => {
+  return entries
+    .map((entry) => {
+      const header = `[${formatTime(entry.ts)}] ${entry.level} ${entry.event}`;
+      const data = formatData(entry.data);
+      return data ? `${header}\n${data}` : header;
+    })
+    .join('\n\n');
+};
+
+const buildDiagnosticsCopy = () => {
+  const parts: string[] = [];
+  const logText = store.logEntries.length ? buildLogCopy(store.logEntries) : '(empty)';
+  parts.push('LIVE_LOG', logText);
+  const state = store.exportJson();
+  parts.push('APP_STATE', state || '(unavailable)');
+  return parts.join('\n\n');
+};
+
+const copyLiveLog = async () => {
+  const payload = buildDiagnosticsCopy();
+  try {
+    await navigator.clipboard.writeText(payload);
+    toast('Diagnostics copied');
+  } catch {
+    window.prompt('Copy diagnostics:', payload);
   }
 };
 
