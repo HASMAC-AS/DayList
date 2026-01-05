@@ -595,8 +595,28 @@ export async function connectProvider(opts: {
             ? msg.topics.includes(opts.room)
             : msg.topic === opts.room;
 
-      if (typeof msg.from === 'string' && msg.from && hasTopic) {
-        recordPeerSeen(msg.from, conn, `signal:${msg.type || 'from'}`, { type: msg.type });
+      if (msg.type === 'publish' && hasTopic) {
+        if (msg.data && typeof msg.data === 'object') {
+          const data = msg.data as { from?: unknown; type?: unknown };
+          const peerId = typeof data.from === 'string' ? data.from : '';
+          if (peerId) {
+            recordPeerSeen(peerId, conn, `signal:${typeof data.type === 'string' ? data.type : 'from'}`, {
+              type: data.type
+            });
+          }
+        } else if (typeof msg.data === 'string') {
+          decryptSignalPayload(msg.data)
+            .then((decrypted) => {
+              if (!decrypted || typeof decrypted !== 'object') return;
+              const data = decrypted as { from?: unknown; type?: unknown };
+              const peerId = typeof data.from === 'string' ? data.from : '';
+              if (!peerId) return;
+              recordPeerSeen(peerId, conn, `signal:${typeof data.type === 'string' ? data.type : 'from'}`, {
+                type: data.type
+              });
+            })
+            .catch(() => {});
+        }
       }
       if (msg.type === 'welcome' && Array.isArray(msg.peers) && msg.peers.length > 0) {
         msg.peers.forEach((peerId) => {
