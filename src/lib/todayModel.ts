@@ -32,7 +32,14 @@ export function buildTodaySections(tasks: Task[], now: number = Date.now()): Tod
     }
   }
 
-  daily.sort((a, b) => orderValue(a) - orderValue(b));
+  daily.sort((a, b) => {
+    const aDone = isCompletedForDay(a, dayKey);
+    const bDone = isCompletedForDay(b, dayKey);
+    if (aDone !== bDone) return aDone ? 1 : -1;
+    const orderDiff = orderValue(a) - orderValue(b);
+    if (orderDiff) return orderDiff;
+    return String(a.title || '').localeCompare(String(b.title || ''));
+  });
   scheduledDue.sort((a, b) => orderValue(a) - orderValue(b) || (a.dueAt || 0) - (b.dueAt || 0));
   scheduledUpcoming.sort((a, b) => (a.dueAt || 0) - (b.dueAt || 0));
 

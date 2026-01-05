@@ -62,6 +62,7 @@ export async function connectProvider(opts: {
   const knownPeers = new Set<string>();
   const hookedPeers = new Set<string>();
   let staleInterval: ReturnType<typeof setInterval> | null = null;
+  const startupAt = Date.now();
 
   const STALE_CHECK_INTERVAL_MS = 5_000;
   const RESYNC_RETRY_MS = 500;
@@ -176,6 +177,9 @@ export async function connectProvider(opts: {
       return (msg.data as { type?: string }).type === 'signal';
     }
     if (typeof msg.data !== 'string') return false;
+    const looksBase64 =
+      msg.data.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(msg.data);
+    if (!looksBase64) return false;
     return decryptSignalPayload(msg.data)
       .then((decrypted) => {
         if (!decrypted || typeof decrypted !== 'object') return false;
@@ -210,7 +214,9 @@ export async function connectProvider(opts: {
     opts.onPeerSeen?.({ peerId, reason, at: now, detail });
     const last = peerLastSeen.get(peerId);
     const stale = last != null && now - last > PEER_STALE_MS;
-    const urgent = last == null || now - (last || 0) > PEER_URGENT_MS;
+    const urgent =
+      (last != null && now - last > PEER_URGENT_MS) ||
+      (last == null && now - startupAt > PEER_URGENT_MS);
     const isNew = last == null;
     peerLastSeen.set(peerId, now);
     const detailType =
