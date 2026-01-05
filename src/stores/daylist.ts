@@ -40,9 +40,9 @@ import type {
   SnapshotKeys
 } from '../lib/types';
 import { createDebugLogger, bindDebugWindow, type DebugLogger } from '../services/sync/debugLog';
-import { getIceServers } from '../services/sync/meteredTurn';
 import { createRateLimitedFetch } from '../services/sync/netThrottle';
-import { connectProvider, getPeerCount, type SignalingStatus } from '../services/sync/provider';
+import { getPeerCount, type SignalingStatus } from '../services/sync/provider';
+import { createSyncSession, type SyncSession } from '../services/sync/session';
 import {
   createSnapshotMirror,
   exportSnapshot,
@@ -56,9 +56,6 @@ import { useToastBus } from '../services/toast';
 import { startVersionPolling } from '../services/versionCheck';
 
 const HISTORY_DAYS = 7;
-const TURN_UPGRADE_DELAY_MS = 800;
-const TURN_SIGNAL_GRACE_MS = 800;
-const TURN_MAX_WAIT_MS = 4000;
 const ACTIVE_LIST_KEY = 'daylist.activeListId.v1';
 
 export const useDaylistStore = defineStore('daylist', () => {
@@ -123,10 +120,10 @@ export const useDaylistStore = defineStore('daylist', () => {
 
   const ydocHandles = shallowRef<YDocHandles | null>(null);
   const provider = shallowRef<WebrtcProvider | null>(null);
+  const session = shallowRef<SyncSession | null>(null);
   const snapshotMirror = shallowRef<ReturnType<typeof createSnapshotMirror> | null>(null);
   const logger = shallowRef<DebugLogger | null>(null);
   const initialized = ref(false);
-  let turnUpgradeTimer: number | null = null;
   let stopVersionPoll: (() => void) | null = null;
   let resumeTimer: number | null = null;
   let lastResumeAt = 0;
@@ -134,7 +131,6 @@ export const useDaylistStore = defineStore('daylist', () => {
   let watchdogTimer: number | null = null;
   let lastHardReconnectAt = 0;
   let lastOfflineAt = 0;
-  let turnUpgradeStartAt = 0;
 
   const logEntries = ref<
     Array<{
@@ -484,13 +480,6 @@ export const useDaylistStore = defineStore('daylist', () => {
     }
   };
 
-  const clearTurnUpgradeTimer = () => {
-    if (turnUpgradeTimer != null) {
-      window.clearTimeout(turnUpgradeTimer);
-      turnUpgradeTimer = null;
-    }
-  };
-
   const hasSignalingConnection = () =>
     Object.values(signalingStatus).some((status) => status && status.connected);
 
@@ -499,6 +488,12 @@ export const useDaylistStore = defineStore('daylist', () => {
     if (now - lastHardReconnectAt < 5000) return;
     lastHardReconnectAt = now;
     logEvent('sync:hard_reconnect', { reason });
+    if (session.value) {
+      session.value
+        .restart(reason)
+        .catch((error) => logEvent('sync:hard_reconnect_failed', { reason, error: errToObj(error) }, 'WARN'));
+      return;
+    }
     connectSync();
   };
 
@@ -506,7 +501,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     const now = Date.now();
     if (now - lastKickAt < 4000) return;
     lastKickAt = now;
-    if (!provider.value || !providerConnected.value) {
+    if (!provider.value || !providerConnected.value || !session.value) {
       logEvent('sync:kick_fallback', { reason });
       connectSync();
       return;
@@ -530,8 +525,7 @@ export const useDaylistStore = defineStore('daylist', () => {
         hardReconnect(`kick:${reason}`);
         return;
       }
-      provider.value.disconnect();
-      provider.value.connect();
+      session.value.softReconnect(reason);
     } catch (error) {
       logEvent('sync:kick_failed', { reason, error: errToObj(error) }, 'WARN');
       connectSync();
@@ -589,15 +583,10 @@ export const useDaylistStore = defineStore('daylist', () => {
         return;
       }
 
-      if (provider.value && providerConnected.value && signalOk) {
+      if (session.value && providerConnected.value && signalOk) {
         logEvent('sync:resume_soft', { reason, ageMs: age });
-        try {
-          provider.value.disconnect();
-          provider.value.connect();
-          return;
-        } catch (error) {
-          logEvent('sync:resume_soft_failed', { reason, error: errToObj(error) }, 'WARN');
-        }
+        session.value.softReconnect(`resume:${reason}`);
+        return;
       }
 
       logEvent('sync:resume_reconnect', { reason, ageMs: age });
@@ -607,22 +596,6 @@ export const useDaylistStore = defineStore('daylist', () => {
 
   const connectSync = async () => {
     if (!ydocHandles.value) return;
-    const hasPeers = () => peerCount.value > 0;
-    const hasRecentSignalPeer = () =>
-      signalingPeerSeenAt.value > 0 && Date.now() - signalingPeerSeenAt.value < TURN_SIGNAL_GRACE_MS;
-
-    const maybeSkipSecondary = (reason: string) => {
-      if (!turnUpgradeTimer) return false;
-      if (!hasPeers()) return false;
-      logEvent('ice:secondary_skip_peers', {
-        reason,
-        peerCount: peerCount.value,
-        webrtcPeers: webrtcPeers.value.length,
-        bcPeers: bcPeers.value.length
-      });
-      clearTurnUpgradeTimer();
-      return true;
-    };
 
     const room = (keys.room || '').trim();
     const enc = (keys.enc || '').trim();
@@ -647,192 +620,68 @@ export const useDaylistStore = defineStore('daylist', () => {
     signaling.value = sig;
     signalingPeerSeenAt.value = 0;
     signalingLastMessageAt.value = 0;
+    peerCount.value = 0;
+    providerConnected.value = false;
+    webrtcPeers.value = [];
+    bcPeers.value = [];
+    usingTurn.value = false;
     // Reset cached signaling connection state. On iOS Safari in particular the page can be
-    // frozen/suspended without firing clean disconnect events, leaving stale "connected" flags
+    // frozen/suspended without firing clean disconnect events, leaving stale \"connected\" flags
     // around that can trick our resume logic.
     Object.keys(signalingStatus).forEach((url) => {
       delete signalingStatus[url];
     });
 
-    const hasTurnServer = (iceServers: RTCIceServer[]) =>
-      iceServers.some((server) => {
-        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-        return urls.some((url) => typeof url === 'string' && (url.startsWith('turn:') || url.startsWith('turns:')));
-      });
-
-    const iceKey = (server: RTCIceServer) => {
-      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-      return `${urls.join('|')}|${server.username || ''}|${String(server.credential || '')}`;
-    };
-
-    const mergeIceServers = (primary: RTCIceServer[], secondary: RTCIceServer[]) => {
-      const seen = new Set<string>();
-      const merged: RTCIceServer[] = [];
-      const addServer = (server: RTCIceServer) => {
-        const key = iceKey(server);
-        if (seen.has(key)) return;
-        seen.add(key);
-        merged.push(server);
-      };
-      primary.forEach(addServer);
-      secondary.forEach(addServer);
-      return merged;
-    };
-
-    const connectWithIce = async (iceServers: RTCIceServer[], context: string) => {
-      const hasTurn = iceServers.some((server) => {
-        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-        return urls.some((url) => typeof url === 'string' && (url.startsWith('turn:') || url.startsWith('turns:')));
-      });
-      usingTurn.value = hasTurn;
-      peerCount.value = 0;
-      providerConnected.value = false;
-      webrtcPeers.value = [];
-      bcPeers.value = [];
-
-      if (provider.value) {
-        try {
-          provider.value.destroy();
-        } catch {
-          // ignore
-        }
-        provider.value = null;
-      }
-
-      provider.value = await connectProvider({
-        doc: ydocHandles.value,
-        room,
-        enc,
-        signaling: sig,
-        iceServers,
-        onAwarenessChange: () => {
-          updateSyncBadge();
-          rebuildDerivedState();
-          maybeSkipSecondary('awareness');
-        },
-        onPeerSeen: (info) => {
-          signalingPeerSeenAt.value = info.at;
-        },
-        onStatus: () => {
-          updateSyncBadge();
-        },
-        onSignalingStatus: (status) => {
-          signalingStatus[status.url] = status;
-          if (status.lastMessageReceived) {
-            signalingLastMessageAt.value = Math.max(signalingLastMessageAt.value, status.lastMessageReceived);
-          }
-        },
-        onPeers: (peers) => {
-          webrtcPeers.value = peers.webrtcPeers;
-          bcPeers.value = peers.bcPeers;
-          maybeSkipSecondary('peers');
-        },
-        onLog: logEvent
-      });
-
-      updateSyncBadge();
-      logEvent('sync:provider_connected', { context, usingTurn: hasTurn });
-
-      if (context === 'turn-primary' && !hasTurn && turnKey) toast('TURN fetch failed; staying STUN-only');
-      else if (context === 'turn-primary' && hasTurn) toast('Using TURN-first ICE');
-      else if (context === 'stun-primary') toast('Using STUN-only ICE');
-    };
-
-    clearTurnUpgradeTimer();
-    turnUpgradeStartAt = 0;
-    const stunOnlyPromise = getIceServers({
+    if (session.value) session.value.dispose();
+    provider.value = null;
+    session.value = await createSyncSession({
+      doc: ydocHandles.value,
+      room,
+      enc,
+      signaling: sig,
       turnKey,
-      allowTurn: false,
+      turnEnabled,
       fetchFn: throttledFetch,
       storage: localStorage,
-      now: () => Date.now(),
-      log: logEvent
+      platform: { isIPhone },
+      debugSignaling: !!logger.value?.enabled,
+      onProvider: (next) => {
+        provider.value = next;
+      },
+      onStatus: ({ connected }) => {
+        providerConnected.value = connected;
+        updateSyncBadge();
+      },
+      onPeers: (peers) => {
+        webrtcPeers.value = peers.webrtcPeers;
+        bcPeers.value = peers.bcPeers;
+      },
+      onAwarenessChange: () => {
+        updateSyncBadge();
+        rebuildDerivedState();
+      },
+      onSignalingStatus: (status) => {
+        signalingStatus[status.url] = status;
+        if (status.lastMessageReceived) {
+          signalingLastMessageAt.value = Math.max(signalingLastMessageAt.value, status.lastMessageReceived);
+        }
+      },
+      onPeerSeen: (info) => {
+        signalingPeerSeenAt.value = info.at;
+      },
+      onIce: ({ config, reason }) => {
+        usingTurn.value = config.mode !== 'stun';
+        logEvent('ice:config', { reason, mode: config.mode, transport: config.transport, count: config.iceServers.length });
+        if (reason.includes('user_connect')) {
+          if (config.mode === 'stun') toast('Using STUN-only ICE');
+          else if (config.mode === 'turn') toast('Using TURN-first ICE');
+          else toast('Using TURN+STUN ICE');
+        }
+      },
+      onLog: logEvent
     });
 
-    let turnIce: RTCIceServer[] | null = null;
-    let turnHasTurn = false;
-    if (turnKey && turnEnabled) {
-      turnIce = await getIceServers({
-        turnKey,
-        allowTurn: true,
-        fetchFn: throttledFetch,
-        storage: localStorage,
-        now: () => Date.now(),
-        log: logEvent
-      });
-      turnHasTurn = hasTurnServer(turnIce);
-    }
-
-    const stunOnlyIce = await stunOnlyPromise;
-
-    if (turnIce && turnHasTurn) {
-      await connectWithIce(turnIce, 'turn-primary');
-    } else {
-      await connectWithIce(stunOnlyIce, 'stun-primary');
-    }
-
-    if (turnKey && turnEnabled) {
-      if (!turnIce || !turnHasTurn) return;
-
-      const secondaryIce = isIPhone ? stunOnlyIce : mergeIceServers(turnIce, stunOnlyIce);
-      const turnKeys = new Set(turnIce.map((server) => iceKey(server)));
-      const secondaryKeys = new Set(secondaryIce.map((server) => iceKey(server)));
-      const hasSecondaryDiff =
-        secondaryKeys.size !== turnKeys.size ||
-        Array.from(secondaryKeys).some((key) => !turnKeys.has(key));
-      const secondaryContext = isIPhone ? 'stun-secondary' : 'turn+stun-secondary';
-
-      if (!secondaryIce.length || !hasSecondaryDiff) {
-        logEvent('ice:secondary_skip_same', { target: secondaryContext });
-        return;
-      }
-
-      const scheduleSecondary = (delayMs: number, reason: string) => {
-        clearTurnUpgradeTimer();
-        if (!turnUpgradeStartAt) turnUpgradeStartAt = Date.now();
-        turnUpgradeTimer = window.setTimeout(runSecondary, delayMs);
-        logEvent('ice:secondary_scheduled', { delayMs, reason, target: secondaryContext });
-      };
-
-      const runSecondary = async () => {
-        if (!turnUpgradeTimer) return;
-        const now = Date.now();
-        if (!turnUpgradeStartAt) turnUpgradeStartAt = now;
-        if (hasRecentSignalPeer() && now - turnUpgradeStartAt < TURN_MAX_WAIT_MS) {
-          logEvent('ice:secondary_delay_signal', {
-            delayMs: TURN_SIGNAL_GRACE_MS,
-            seenMsAgo: now - signalingPeerSeenAt.value,
-            target: secondaryContext
-          });
-          scheduleSecondary(TURN_SIGNAL_GRACE_MS, 'signal_recent');
-          return;
-        }
-        logEvent('ice:secondary_check', {
-          delayMs: TURN_UPGRADE_DELAY_MS,
-          peerCount: peerCount.value,
-          webrtcPeers: webrtcPeers.value.length,
-          bcPeers: bcPeers.value.length,
-          target: secondaryContext
-        });
-        if (hasPeers()) {
-          logEvent('ice:secondary_skip_peers', {
-            reason: 'delay_check',
-            peerCount: peerCount.value,
-            webrtcPeers: webrtcPeers.value.length,
-            bcPeers: bcPeers.value.length,
-            target: secondaryContext
-          });
-          clearTurnUpgradeTimer();
-          return;
-        }
-
-        logEvent('ice:secondary_connecting', { target: secondaryContext });
-        await connectWithIce(secondaryIce, secondaryContext);
-        clearTurnUpgradeTimer();
-      };
-
-      scheduleSecondary(TURN_UPGRADE_DELAY_MS, 'initial');
-    }
+    await session.value.start('user_connect');
   };
 
   const setActiveList = (id: string) => {
@@ -1084,14 +933,11 @@ export const useDaylistStore = defineStore('daylist', () => {
     if (!ydocHandles.value) return;
 
     try {
-      if (provider.value) {
-        try {
-          provider.value.destroy();
-        } catch {
-          // ignore
-        }
-        provider.value = null;
+      if (session.value) {
+        session.value.dispose();
+        session.value = null;
       }
+      provider.value = null;
 
       if (snapshotMirror.value) {
         snapshotMirror.value.dispose();

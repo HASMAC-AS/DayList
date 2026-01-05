@@ -21,6 +21,10 @@ export interface SignalingStatus {
   lastMessageReceived: number;
 }
 
+type Outgoing = { conn: SignalingConn; message: unknown; enqueuedAt: number; key: string };
+
+type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
+
 export async function connectProvider(opts: {
   doc: YDocHandles;
   room: string;
@@ -32,81 +36,67 @@ export async function connectProvider(opts: {
   onSignalingStatus?: (status: SignalingStatus) => void;
   onPeers?: (peers: { webrtcPeers: string[]; bcPeers: string[] }) => void;
   onPeerSeen?: (info: { peerId?: string; reason: string; at: number; detail?: unknown }) => void;
-  onLog?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG') => void;
+  onLog?: (event: string, data?: unknown, level?: LogLevel) => void;
+  debugSignaling?: boolean;
 }): Promise<WebrtcProvider> {
-  const STARTUP_BURST_COUNT = 10;
-  const STARTUP_BURST_INTERVAL_MS = 100;
-  const PRE_PEER_INTERVAL_MS = 500;
-  const POST_PEER_INTERVAL_MS = 10_000;
+  const DISCOVERY_INTERVAL_MS = 250;
+  const STEADY_INTERVAL_MS = 45_000;
+  const LOW_BURST_COUNT = 3;
   const PEER_STALE_MS = 20_000;
   const PEER_IDLE_RESET_MS = 15_000;
-  const PEER_URGENT_MS = 5 * 60 * 1000;
-  const URGENT_BURST_COUNT = 3;
-  const MESSAGE_SYNC = 0;
-  const MESSAGE_AWARENESS = 1;
-  const MESSAGE_QUERY_AWARENESS = 3;
-  const DISCOVERY_TYPES = new Set(['signal', 'announce']);
-
-  const sendQueue: Array<() => void> = [];
-  let sendTimer: ReturnType<typeof setTimeout> | null = null;
-  let burstRemaining = 0;
-  let startupBurstUsed = false;
-  let peerConnected = false;
-  let peerDiscovered = false;
-  let priorityRemaining = 0;
-  let peerSeen = false;
-  let peerSeenAt = 0;
-  let peerIdleTimer: ReturnType<typeof setTimeout> | null = null;
-  const peerLastSeen = new Map<string, number>();
-  const pendingPeers = new Set<string>();
-  const urgentPeers = new Set<string>();
-  const startupResynced = new Set<string>();
-  const resyncPending = new Map<string, { reason: string; attempts: number }>();
-  const knownPeers = new Set<string>();
-  const hookedPeers = new Set<string>();
-  let staleInterval: ReturnType<typeof setInterval> | null = null;
-  const startupAt = Date.now();
-
   const STALE_CHECK_INTERVAL_MS = 5_000;
   const RESYNC_RETRY_MS = 500;
   const RESYNC_MAX_ATTEMPTS = 12;
+  const RESYNC_MIN_INTERVAL_MS = 30_000;
+  const MESSAGE_SYNC = 0;
+  const MESSAGE_AWARENESS = 1;
+  const MESSAGE_QUERY_AWARENESS = 3;
 
-  const currentInterval = () => {
-    if (burstRemaining > 0) return STARTUP_BURST_INTERVAL_MS;
-    return peerDiscovered ? POST_PEER_INTERVAL_MS : PRE_PEER_INTERVAL_MS;
-  };
+  const lowQueue = new Map<string, Outgoing>();
+  let lowTimer: ReturnType<typeof setTimeout> | null = null;
+  let lowBurstTokens = 0;
+  let mode: 'discovery' | 'steady' = 'discovery';
+  let peerIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  const peerLastSeenAt = new Map<string, number>();
+  const peerSeenOnConn = new Map<string, string>();
+  const pendingPeers = new Set<string>();
+  const resyncPending = new Map<string, { reason: string; attempts: number }>();
+  const lastResyncAt = new Map<string, number>();
+  const hookedPeers = new Set<string>();
+  const connSend = new WeakMap<SignalingConn, (message: unknown) => void>();
+  let staleInterval: ReturnType<typeof setInterval> | null = null;
 
-  const startPump = () => {
-    if (sendTimer != null) return;
-    const pump = () => {
-      if (sendQueue.length === 0) {
-        sendTimer = null;
-        return;
-      }
-      const next = sendQueue.shift();
-      if (next) next();
-      if (burstRemaining > 0) burstRemaining -= 1;
-      sendTimer = setTimeout(pump, currentInterval());
-    };
-    pump();
-  };
+  const currentInterval = () => (mode === 'discovery' ? DISCOVERY_INTERVAL_MS : STEADY_INTERVAL_MS);
 
-  const scheduleSend = (fn: () => void) => {
-    if (priorityRemaining > 0) {
-      priorityRemaining -= 1;
-      fn();
-      return;
+  const resetLowTimer = () => {
+    if (lowTimer != null) {
+      clearTimeout(lowTimer);
+      lowTimer = null;
     }
-    sendQueue.push(fn);
-    startPump();
+    if (lowQueue.size > 0) scheduleLowPump(0);
   };
 
-  const resetSendTimer = () => {
-    if (sendTimer != null) {
-      clearTimeout(sendTimer);
-      sendTimer = null;
-    }
-    startPump();
+  const scheduleLowPump = (delayMs?: number) => {
+    if (lowTimer != null) return;
+    lowTimer = setTimeout(pumpLow, delayMs ?? currentInterval());
+  };
+
+  const pumpLow = () => {
+    lowTimer = null;
+    if (lowQueue.size === 0) return;
+    const entry = lowQueue.entries().next().value as [string, Outgoing] | undefined;
+    if (!entry) return;
+    const [key, outgoing] = entry;
+    lowQueue.delete(key);
+    sendNow(outgoing.conn, outgoing.message);
+    if (lowQueue.size > 0) scheduleLowPump();
+  };
+
+  const setMode = (next: 'discovery' | 'steady', reason: string) => {
+    if (mode === next) return;
+    mode = next;
+    opts.onLog?.('signal:throttle_mode', { phase: mode, intervalMs: currentInterval(), reason });
+    resetLowTimer();
   };
 
   const clearPeerIdleTimer = () => {
@@ -120,23 +110,42 @@ export async function connectProvider(opts: {
     if (peerIdleTimer != null) return;
     peerIdleTimer = setTimeout(() => {
       peerIdleTimer = null;
-      if (computeHasPeer()) return;
-      if (!peerDiscovered) return;
-      peerDiscovered = false;
-      opts.onLog?.('signal:peer_idle_reset', { reason, afterMs: PEER_IDLE_RESET_MS });
-      resetSendTimer();
+      setMode('discovery', `peer_idle:${reason}`);
     }, PEER_IDLE_RESET_MS);
     opts.onLog?.('signal:peer_idle_scheduled', { reason, afterMs: PEER_IDLE_RESET_MS });
   };
 
-  const grantPriorityBurst = (reason: string) => {
-    priorityRemaining = Math.max(priorityRemaining, URGENT_BURST_COUNT);
-    opts.onLog?.('signal:priority_burst', { reason, remaining: priorityRemaining });
-    while (priorityRemaining > 0 && sendQueue.length > 0) {
-      const next = sendQueue.shift();
-      if (next) next();
-      priorityRemaining -= 1;
+  const flushLowBurst = () => {
+    while (lowBurstTokens > 0 && lowQueue.size > 0) {
+      const entry = lowQueue.entries().next().value as [string, Outgoing] | undefined;
+      if (!entry) return;
+      const [key, outgoing] = entry;
+      lowQueue.delete(key);
+      lowBurstTokens -= 1;
+      sendNow(outgoing.conn, outgoing.message);
     }
+  };
+
+  const grantLowBurst = (reason: string, count = LOW_BURST_COUNT) => {
+    lowBurstTokens = Math.max(lowBurstTokens, count);
+    opts.onLog?.('signal:low_burst', { reason, remaining: lowBurstTokens, mode });
+    flushLowBurst();
+  };
+
+  const classifyOutgoing = (message: unknown): 'immediate' | 'low' => {
+    if (!message || typeof message !== 'object') return 'immediate';
+    const msg = message as { type?: string; to?: string; topic?: string };
+    if (msg.type && msg.type !== 'publish') return 'immediate';
+    if (msg.type !== 'publish') return 'immediate';
+    if (msg.to) return 'immediate';
+    if (msg.topic && msg.topic !== opts.room) return 'immediate';
+    return 'low';
+  };
+
+  const lowKey = (conn: SignalingConn, message: unknown) => {
+    const msg = message as { topic?: string } | null;
+    const topic = msg && typeof msg.topic === 'string' && msg.topic ? msg.topic : opts.room;
+    return `${conn.url}|${topic}`;
   };
 
   const provider = new WebrtcProvider(opts.room, opts.doc.ydoc, {
@@ -190,26 +199,54 @@ export async function connectProvider(opts: {
     return message;
   };
 
-  const shouldBypassThrottle = (message: unknown) => {
-    if (!message || typeof message !== 'object') return false;
-    const msg = message as { type?: string; data?: unknown; topic?: string };
-    if (msg.type && msg.type !== 'publish') return true;
-    if (msg.type !== 'publish') return false;
-    if (msg.topic !== opts.room) return false;
-    const isDiscoveryType = (value: unknown) => typeof value === 'string' && DISCOVERY_TYPES.has(value);
-    if (msg.data && typeof msg.data === 'object') {
-      return isDiscoveryType((msg.data as { type?: string }).type);
-    }
-    if (typeof msg.data !== 'string') return false;
-    const looksBase64 =
-      msg.data.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(msg.data);
-    if (!looksBase64) return false;
-    return decryptSignalPayload(msg.data)
+  const logDecrypted = (direction: 'send' | 'recv', url: string, message: unknown) => {
+    if (!opts.debugSignaling) return;
+    if (!message || typeof message !== 'object') return;
+    const msg = message as { type?: string; data?: unknown; from?: string; to?: string; topic?: string };
+    if (msg.type !== 'publish' || typeof msg.data !== 'string') return;
+    if (msg.topic && msg.topic !== opts.room) return;
+    decryptSignalPayload(msg.data)
       .then((decrypted) => {
-        if (!decrypted || typeof decrypted !== 'object') return false;
-        return isDiscoveryType((decrypted as { type?: string }).type);
+        if (decrypted == null) return;
+        opts.onLog?.(`signal:${direction}_decrypted`, {
+          url,
+          from: msg.from,
+          to: msg.to,
+          decrypted
+        });
       })
-      .catch(() => true);
+      .catch((error) => {
+        opts.onLog?.(
+          `signal:${direction}_decrypt_failed`,
+          { url, topic: msg.topic, error: errToObj(error) },
+          'WARN'
+        );
+      });
+  };
+
+  const sendNow = (conn: SignalingConn, message: unknown) => {
+    const send =
+      connSend.get(conn) ||
+      ((conn as SignalingConn & { __dlSend?: (message: unknown) => void }).__dlSend || null);
+    opts.onLog?.('signal:send', {
+      url: conn.url,
+      message: sanitizeSignalMessage(message),
+      intervalMs: currentInterval(),
+      mode
+    });
+    logDecrypted('send', conn.url, message);
+    if (send) send(message);
+  };
+
+  const queueLow = (conn: SignalingConn, message: unknown) => {
+    if (lowBurstTokens > 0) {
+      lowBurstTokens -= 1;
+      sendNow(conn, message);
+      return;
+    }
+    const key = lowKey(conn, message);
+    lowQueue.set(key, { conn, message, enqueuedAt: Date.now(), key });
+    scheduleLowPump();
   };
 
   const ensureWebrtcConn = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
@@ -231,63 +268,20 @@ export async function connectProvider(opts: {
     }
   };
 
-  const notePeerSeen = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
+  const recordPeerSeen = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
     const localPeerId = getLocalPeerId();
     if (!peerId || peerId === localPeerId) return;
     const now = Date.now();
-    opts.onPeerSeen?.({ peerId, reason, at: now, detail });
-    const last = peerLastSeen.get(peerId);
-    const stale = last != null && now - last > PEER_STALE_MS;
-    const urgent =
-      (last != null && now - last > PEER_URGENT_MS) ||
-      (last == null && now - startupAt > PEER_URGENT_MS);
+    const last = peerLastSeenAt.get(peerId);
     const isNew = last == null;
-    peerLastSeen.set(peerId, now);
-    const detailType =
-      detail && typeof detail === 'object' && 'type' in (detail as Record<string, unknown>)
-        ? String((detail as Record<string, unknown>).type || '')
-        : '';
-    const isSignal = detailType === 'signal' || reason.includes('signal');
-
-    if (isNew || stale) {
-      if (urgent) {
-        grantPriorityBurst(isNew ? 'new_peer' : 'stale_peer');
-        urgentPeers.add(peerId);
-      }
-      if (!isSignal) {
-        ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
-      }
+    const isStale = last != null && now - last > PEER_STALE_MS;
+    peerLastSeenAt.set(peerId, now);
+    peerSeenOnConn.set(peerId, conn.url);
+    opts.onPeerSeen?.({ peerId, reason, at: now, detail });
+    if (isNew || isStale) {
+      grantLowBurst(isNew ? 'peer_new' : 'peer_stale');
+      ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
     }
-  };
-
-  const logDecrypted = (direction: 'send' | 'recv', url: string, message: unknown, conn?: SignalingConn) => {
-    if (!message || typeof message !== 'object') return;
-    const msg = message as { type?: string; data?: unknown; from?: string; to?: string; topic?: string };
-    if (msg.type !== 'publish' || typeof msg.data !== 'string') return;
-    if (msg.topic !== opts.room) return;
-    decryptSignalPayload(msg.data)
-      .then((decrypted) => {
-        if (decrypted == null) return;
-        opts.onLog?.(`signal:${direction}_decrypted`, {
-          url,
-          from: msg.from,
-          to: msg.to,
-          decrypted
-        });
-        if (direction === 'recv' && conn && decrypted && typeof decrypted === 'object') {
-          const dec = decrypted as { from?: string; type?: string };
-          if (typeof dec.from === 'string' && dec.from) {
-            notePeerSeen(dec.from, conn, 'signal:decrypted', { type: dec.type });
-          }
-        }
-      })
-      .catch((error) => {
-        opts.onLog?.(
-          `signal:${direction}_decrypt_failed`,
-          { url, topic: msg.topic, error: errToObj(error) },
-          'WARN'
-        );
-      });
   };
 
   const flushPendingPeers = (reason: string) => {
@@ -365,47 +359,15 @@ export async function connectProvider(opts: {
 
   const requestResync = (peerId: string, reason: string) => {
     if (!peerId) return;
-    resyncPending.set(peerId, { reason, attempts: 0 });
-    attemptResync(peerId);
-  };
-
-  const computeHasPeer = () => provider.awareness.getStates().size > 1;
-  const updateHasPeer = (reason: string) => {
-    const nowHasPeer = computeHasPeer();
-    if (nowHasPeer) {
-      clearPeerIdleTimer();
-      if (!peerConnected) {
-        peerConnected = true;
-        opts.onLog?.('signal:peer_connected', { reason });
-      }
-      if (!peerDiscovered) {
-        peerDiscovered = true;
-        opts.onLog?.('signal:peer_discovered', { reason, intervalMs: currentInterval() });
-        resetSendTimer();
-      }
-      opts.onLog?.('signal:peer_detected', { reason });
+    const now = Date.now();
+    const last = lastResyncAt.get(peerId) || 0;
+    if (now - last < RESYNC_MIN_INTERVAL_MS) {
+      opts.onLog?.('webrtc:resync_skip_cooldown', { peerId, reason, ageMs: now - last }, 'DEBUG');
       return;
     }
-    if (peerConnected) {
-      peerConnected = false;
-      opts.onLog?.('signal:peer_lost', { reason });
-    }
-    if (peerDiscovered) {
-      schedulePeerIdleReset(reason);
-    }
-  };
-
-  const markPeerSeen = (reason: string, detail?: unknown) => {
-    if (peerSeen) return;
-    clearPeerIdleTimer();
-    peerSeen = true;
-    peerSeenAt = Date.now();
-    if (!peerDiscovered) {
-      peerDiscovered = true;
-      opts.onLog?.('signal:peer_discovered', { reason, intervalMs: currentInterval() });
-      resetSendTimer();
-    }
-    opts.onLog?.('signal:peer_seen', { reason, detail, at: peerSeenAt });
+    lastResyncAt.set(peerId, now);
+    resyncPending.set(peerId, { reason, attempts: 0 });
+    attemptResync(peerId);
   };
 
   const originalDestroy = provider.destroy.bind(provider);
@@ -415,11 +377,15 @@ export async function connectProvider(opts: {
       staleInterval = null;
     }
     clearPeerIdleTimer();
+    if (lowTimer != null) {
+      clearTimeout(lowTimer);
+      lowTimer = null;
+    }
     return originalDestroy();
   };
 
   opts.onLog?.('signal:throttle_mode', {
-    phase: 'init',
+    phase: mode,
     intervalMs: currentInterval()
   });
 
@@ -427,9 +393,9 @@ export async function connectProvider(opts: {
     const now = Date.now();
     const conn = getAnyConn();
     if (!conn) return;
-    peerLastSeen.forEach((lastSeen, peerId) => {
+    peerLastSeenAt.forEach((lastSeen, peerId) => {
       if (now - lastSeen > PEER_STALE_MS) {
-        peerLastSeen.set(peerId, now);
+        peerLastSeenAt.set(peerId, now);
         ensureWebrtcConn(peerId, conn, 'stale_check');
       }
     });
@@ -445,9 +411,8 @@ export async function connectProvider(opts: {
       .catch(() => {});
   }
 
-  provider.awareness.on('change', (...args: unknown[]) => {
+  provider.awareness.on('change', () => {
     opts.onAwarenessChange();
-    updateHasPeer('awareness');
   });
 
   provider.on('status', (event) => {
@@ -464,22 +429,13 @@ export async function connectProvider(opts: {
     });
     opts.onLog?.('provider:peers', event);
     const webrtcList = Array.isArray(event.webrtcPeers) ? event.webrtcPeers : [];
-    const added = Array.isArray(event.added)
-      ? event.added
-      : webrtcList.filter((peerId) => !knownPeers.has(peerId));
-    added.forEach((peerId) => {
-      if (!peerId || typeof peerId !== 'string') return;
-      const reasons: string[] = [];
-      if (!startupResynced.has(peerId)) {
-        startupResynced.add(peerId);
-        reasons.push('startup');
-      }
-      if (urgentPeers.has(peerId)) {
-        urgentPeers.delete(peerId);
-        reasons.push('stale_peer');
-      }
-      if (reasons.length) requestResync(peerId, reasons.join('+'));
-    });
+
+    if (webrtcList.length > 0) {
+      clearPeerIdleTimer();
+      setMode('steady', 'webrtc_peers');
+    } else {
+      schedulePeerIdleReset('webrtc_empty');
+    }
 
     const room = getRoom();
     if (room && room.webrtcConns) {
@@ -493,6 +449,7 @@ export async function connectProvider(opts: {
         try {
           peer.on('connect', () => {
             opts.onLog?.('webrtc:peer_connected', { peerId });
+            requestResync(peerId, 'peer_connect');
           });
           peer.on('close', () => {
             hookedPeers.delete(peerId);
@@ -514,11 +471,6 @@ export async function connectProvider(opts: {
         }
       });
     }
-
-    knownPeers.clear();
-    webrtcList.forEach((peerId) => {
-      if (peerId && typeof peerId === 'string') knownPeers.add(peerId);
-    });
   });
 
   const attachConn = (conn: SignalingConn) => {
@@ -540,15 +492,7 @@ export async function connectProvider(opts: {
     conn.on('connect', () => {
       updateStatus();
       opts.onLog?.('signal:connect', { url: conn.url });
-      if (!startupBurstUsed) {
-        startupBurstUsed = true;
-        burstRemaining = STARTUP_BURST_COUNT;
-        opts.onLog?.('signal:startup_burst', {
-          count: STARTUP_BURST_COUNT,
-          intervalMs: STARTUP_BURST_INTERVAL_MS
-        });
-        resetSendTimer();
-      }
+      grantLowBurst('signal_connect');
       flushPendingPeers('signaling_connect');
     });
     conn.on('disconnect', () => {
@@ -558,56 +502,46 @@ export async function connectProvider(opts: {
     conn.on('message', (message: unknown) => {
       updateStatus();
       opts.onLog?.('signal:recv', { url: conn.url, message: sanitizeSignalMessage(message) });
-      logDecrypted('recv', conn.url, message, conn);
-      if (message && typeof message === 'object') {
-        const msg = message as {
-          type?: string;
-          from?: string;
-          peers?: unknown;
-          topic?: string;
-          topics?: unknown;
-        };
-        if (msg.type === 'publish' && msg.topic && msg.topic !== opts.room) {
-          opts.onLog?.('signal:recv_other_room', { topic: msg.topic, room: opts.room }, 'DEBUG');
-        }
-        const hasTopic =
-          msg.type === 'publish' ? msg.topic === opts.room
-          : Array.isArray(msg.topics) ? msg.topics.includes(opts.room)
-          : false;
-        if (typeof msg.from === 'string' && msg.from && hasTopic) {
-          markPeerSeen(`signal:${msg.type || 'from'}`, { type: msg.type });
-          notePeerSeen(msg.from, conn, `signal:${msg.type || 'from'}`, { type: msg.type });
-        } else if (msg.type === 'welcome' && Array.isArray(msg.peers) && msg.peers.length > 0) {
-          opts.onLog?.('signal:welcome_peers', { count: msg.peers.length });
-        }
+      logDecrypted('recv', conn.url, message);
+      if (!message || typeof message !== 'object') return;
+      const msg = message as {
+        type?: string;
+        from?: string;
+        peers?: unknown;
+        topic?: string;
+        topics?: unknown;
+      };
+      if (msg.type === 'publish' && msg.topic && msg.topic !== opts.room) {
+        opts.onLog?.('signal:recv_other_room', { topic: msg.topic, room: opts.room }, 'DEBUG');
+      }
+      const hasTopic =
+        msg.type === 'publish'
+          ? !msg.topic || msg.topic === opts.room
+          : Array.isArray(msg.topics)
+            ? msg.topics.includes(opts.room)
+            : msg.topic === opts.room;
+
+      if (typeof msg.from === 'string' && msg.from && hasTopic) {
+        recordPeerSeen(msg.from, conn, `signal:${msg.type || 'from'}`, { type: msg.type });
+      }
+      if (msg.type === 'welcome' && Array.isArray(msg.peers) && msg.peers.length > 0) {
+        msg.peers.forEach((peerId) => {
+          if (typeof peerId !== 'string' || !peerId) return;
+          recordPeerSeen(peerId, conn, 'signal:welcome', { count: msg.peers.length });
+        });
       }
     });
 
     const originalSend = conn.send.bind(conn);
+    connSend.set(conn, originalSend);
+    (conn as SignalingConn & { __dlSend?: (message: unknown) => void }).__dlSend = originalSend;
     conn.send = (message: unknown) => {
-      const doSend = () => {
-        opts.onLog?.('signal:send', {
-          url: conn.url,
-          message: sanitizeSignalMessage(message),
-          intervalMs: currentInterval()
-        });
-        logDecrypted('send', conn.url, message);
-        originalSend(message);
-      };
-      const bypass = shouldBypassThrottle(message);
-      if (typeof bypass === 'boolean') {
-        if (bypass) doSend();
-        else scheduleSend(doSend);
-        return;
+      const decision = classifyOutgoing(message);
+      if (decision === 'immediate') {
+        sendNow(conn, message);
+      } else {
+        queueLow(conn, message);
       }
-      bypass
-        .then((allowed) => {
-          if (allowed) doSend();
-          else scheduleSend(doSend);
-        })
-        .catch(() => {
-          doSend();
-        });
     };
   };
 
@@ -616,8 +550,6 @@ export async function connectProvider(opts: {
       if (conn) attachConn(conn as SignalingConn);
     });
   }
-
-  updateHasPeer('init');
 
   return provider;
 }

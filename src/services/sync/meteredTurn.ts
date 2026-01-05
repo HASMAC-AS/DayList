@@ -65,22 +65,34 @@ function saveMeteredIceCache(storage: Storage, iceServers: RTCIceServer[], now: 
   }
 }
 
-export async function getIceServers(opts: {
+export type MeteredIceCache = { fetchedAt: number; iceServers: RTCIceServer[] };
+
+export function loadCachedIce(storage: Storage): MeteredIceCache | null {
+  return loadMeteredIceCache(storage);
+}
+
+export function isFresh(cache: MeteredIceCache, now: number) {
+  return now - cache.fetchedAt < METERED_CACHE_TTL_MS;
+}
+
+export function getStunFallback() {
+  return normalizeIceServers(STUN_FALLBACK);
+}
+
+type TurnFetchResult = {
+  iceServers: RTCIceServer[];
+  source: 'turn-cache-fresh' | 'turn-fetch' | 'turn-cache-stale' | 'turn-fetch-failed';
+  fetchedAt: number;
+};
+
+const fetchTurnIce = async (opts: {
   turnKey: string;
-  allowTurn?: boolean;
   fetchFn: typeof fetch;
   storage: Storage;
   now: () => number;
   log?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR') => void;
-}): Promise<RTCIceServer[]> {
-  if (opts.allowTurn === false) {
-    opts.log?.('turn:skipped_stun_only');
-    return normalizeIceServers(STUN_FALLBACK);
-  }
-
+}): Promise<TurnFetchResult> => {
   const key = (opts.turnKey || '').trim();
-  if (!key) return STUN_FALLBACK;
-
   const cached = loadMeteredIceCache(opts.storage);
   const age = cached ? opts.now() - cached.fetchedAt : null;
 
@@ -89,9 +101,9 @@ export async function getIceServers(opts: {
     const sanitized = normalizeIceServers(cached.iceServers);
     if (!sanitized.length) {
       opts.log?.('turn:cache_invalid_fallback', { ageMs: age }, 'WARN');
-      return normalizeIceServers(STUN_FALLBACK);
+      return { iceServers: getStunFallback(), source: 'turn-fetch-failed', fetchedAt: opts.now() };
     }
-    return sanitized;
+    return { iceServers: sanitized, source: 'turn-cache-fresh', fetchedAt: cached.fetchedAt };
   }
 
   try {
@@ -107,9 +119,9 @@ export async function getIceServers(opts: {
     const sanitized = normalizeIceServers(iceServers);
     if (!sanitized.length) {
       opts.log?.('turn:fetched_invalid_fallback', { count: iceServers.length }, 'WARN');
-      return normalizeIceServers(STUN_FALLBACK);
+      return { iceServers: getStunFallback(), source: 'turn-fetch-failed', fetchedAt: opts.now() };
     }
-    return sanitized;
+    return { iceServers: sanitized, source: 'turn-fetch', fetchedAt: opts.now() };
   } catch (e) {
     if (cached && isValidIceServers(cached.iceServers)) {
       opts.log?.(
@@ -120,11 +132,93 @@ export async function getIceServers(opts: {
       const sanitized = normalizeIceServers(cached.iceServers);
       if (!sanitized.length) {
         opts.log?.('turn:stale_invalid_fallback', { ageMs: age }, 'WARN');
-        return normalizeIceServers(STUN_FALLBACK);
+        return { iceServers: getStunFallback(), source: 'turn-fetch-failed', fetchedAt: opts.now() };
       }
-      return sanitized;
+      return { iceServers: sanitized, source: 'turn-cache-stale', fetchedAt: cached.fetchedAt };
     }
     opts.log?.('turn:fetch_failed_stun_only', { error: toJsonSafe(errToObj(e)) }, 'WARN');
-    return normalizeIceServers(STUN_FALLBACK);
+    return { iceServers: getStunFallback(), source: 'turn-fetch-failed', fetchedAt: opts.now() };
   }
+};
+
+export type IceFastResult = {
+  initial: RTCIceServer[];
+  initialSource: 'turn-cache' | 'stun-fallback' | 'stun-only';
+  refresh?: Promise<{
+    iceServers: RTCIceServer[];
+    source: 'turn-fetch' | 'turn-cache-stale' | 'turn-fetch-failed';
+    fetchedAt: number;
+  }>;
+};
+
+export function getIceServersFast(opts: {
+  turnKey: string;
+  allowTurn?: boolean;
+  fetchFn: typeof fetch;
+  storage: Storage;
+  now: () => number;
+  log?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR') => void;
+}): IceFastResult {
+  if (opts.allowTurn === false) {
+    opts.log?.('turn:skipped_stun_only');
+    return { initial: getStunFallback(), initialSource: 'stun-only' };
+  }
+
+  const key = (opts.turnKey || '').trim();
+  if (!key) return { initial: getStunFallback(), initialSource: 'stun-fallback' };
+
+  const cached = loadMeteredIceCache(opts.storage);
+  const now = opts.now();
+  const age = cached ? now - cached.fetchedAt : null;
+  if (cached && age != null && age < METERED_CACHE_TTL_MS && isValidIceServers(cached.iceServers)) {
+    opts.log?.('turn:cache_hit_fresh', { ageMs: age, count: cached.iceServers.length });
+    const sanitized = normalizeIceServers(cached.iceServers);
+    if (sanitized.length) return { initial: sanitized, initialSource: 'turn-cache' };
+    opts.log?.('turn:cache_invalid_fallback', { ageMs: age }, 'WARN');
+  }
+
+  const refresh = fetchTurnIce({
+    turnKey: key,
+    fetchFn: opts.fetchFn,
+    storage: opts.storage,
+    now: opts.now,
+    log: opts.log
+  }).then((result) => ({
+    iceServers: result.iceServers,
+    source:
+      result.source === 'turn-cache-stale'
+        ? 'turn-cache-stale'
+        : result.source === 'turn-fetch'
+          ? 'turn-fetch'
+          : 'turn-fetch-failed',
+    fetchedAt: result.fetchedAt
+  }));
+
+  return { initial: getStunFallback(), initialSource: 'stun-fallback', refresh };
+}
+
+export async function getIceServers(opts: {
+  turnKey: string;
+  allowTurn?: boolean;
+  fetchFn: typeof fetch;
+  storage: Storage;
+  now: () => number;
+  log?: (event: string, data?: unknown, level?: 'INFO' | 'WARN' | 'ERROR') => void;
+}): Promise<RTCIceServer[]> {
+  if (opts.allowTurn === false) {
+    opts.log?.('turn:skipped_stun_only');
+    return getStunFallback();
+  }
+
+  const key = (opts.turnKey || '').trim();
+  if (!key) return getStunFallback();
+
+  const result = await fetchTurnIce({
+    turnKey: key,
+    fetchFn: opts.fetchFn,
+    storage: opts.storage,
+    now: opts.now,
+    log: opts.log
+  });
+  return result.iceServers;
 }

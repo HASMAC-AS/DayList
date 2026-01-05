@@ -1,9 +1,10 @@
+import type { WebrtcProvider } from 'y-webrtc';
 import { errToObj, parseSignalingList, redact } from '../lib/core';
 import { DEFAULT_SIGNALING } from '../services/sync/defaults';
 import { resolveKeysStrict } from '../services/sync/keys';
-import { getIceServers } from '../services/sync/meteredTurn';
 import { createRateLimitedFetch } from '../services/sync/netThrottle';
-import { connectProvider, getPeerCount, type SignalingStatus } from '../services/sync/provider';
+import { getPeerCount, type SignalingStatus } from '../services/sync/provider';
+import { createSyncSession } from '../services/sync/session';
 import { importSnapshot, loadSnapshotFromStorage } from '../services/sync/snapshot';
 import { createYDoc, type YDocHandles } from '../services/sync/ydoc';
 
@@ -82,12 +83,6 @@ const waitForIdb = async (doc: YDocHandles) => {
   return true;
 };
 
-const hasTurnServer = (iceServers: RTCIceServer[]) =>
-  iceServers.some((server) => {
-    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-    return urls.some((url) => typeof url === 'string' && (url.startsWith('turn:') || url.startsWith('turns:')));
-  });
-
 const main = async () => {
   const keys = resolveKeysStrict({ href: location.href, storage: localStorage });
   setStatus({ room: redact(keys.room) });
@@ -117,18 +112,7 @@ const main = async () => {
   setStatus({ signaling: Array.from(signalingByUrl.values()) });
 
   const throttledFetch = createRateLimitedFetch(fetch, 300);
-  const iceServers = await getIceServers({
-    turnKey: keys.turnKey,
-    allowTurn: keys.turnEnabled,
-    fetchFn: throttledFetch,
-    storage: localStorage,
-    now: () => Date.now(),
-    log
-  });
-
-  setStatus({ usingTurn: hasTurnServer(iceServers) });
-
-  let provider: Awaited<ReturnType<typeof connectProvider>> | null = null;
+  let provider: WebrtcProvider | null = null;
   const updatePeers = (fallback?: { webrtcPeers: string[]; bcPeers: string[] }) => {
     if (provider) {
       setStatus({ peers: getPeerCount(provider) });
@@ -139,12 +123,21 @@ const main = async () => {
     }
   };
 
-  provider = await connectProvider({
+  const session = await createSyncSession({
     doc,
     room: keys.room,
     enc: keys.enc,
     signaling,
-    iceServers,
+    turnKey: keys.turnKey,
+    turnEnabled: keys.turnEnabled !== false,
+    fetchFn: throttledFetch,
+    storage: localStorage,
+    platform: { isIPhone: false },
+    onProvider: (next) => {
+      provider = next;
+      provider.awareness.setLocalStateField('daylist', { role: 'headless-peer' });
+      updatePeers();
+    },
     onAwarenessChange: () => updatePeers(),
     onStatus: ({ connected }) => setStatus({ connected }),
     onSignalingStatus: (sigStatus) => {
@@ -152,11 +145,11 @@ const main = async () => {
       setStatus({ signaling: Array.from(signalingByUrl.values()) });
     },
     onPeers: (peers) => updatePeers(peers),
+    onIce: ({ config }) => setStatus({ usingTurn: config.mode !== 'stun' }),
     onLog: log
   });
 
-  provider.awareness.setLocalStateField('daylist', { role: 'headless-peer' });
-  updatePeers();
+  await session.start('headless_start');
 };
 
 main().catch((error) => {

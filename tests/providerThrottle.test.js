@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 describe('signaling throttling', () => {
-  it('sends a 3-message startup burst at 100ms spacing, then 1 per 1000ms', async () => {
+  it('sends a 3-message startup burst, then 1 per discovery interval', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
@@ -88,40 +88,34 @@ describe('signaling throttling', () => {
     conn.send({ type: 'publish', topic: 'room', data: 'c' });
     conn.send({ type: 'publish', topic: 'room', data: 'd' });
 
-    expect(conn.sendCalls.length).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(100);
-    expect(conn.sendCalls.length).toBe(2);
-
-    await vi.advanceTimersByTimeAsync(100);
     expect(conn.sendCalls.length).toBe(3);
 
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(249);
     expect(conn.sendCalls.length).toBe(3);
 
-    await vi.advanceTimersByTimeAsync(900);
+    await vi.advanceTimersByTimeAsync(1);
     expect(conn.sendCalls.length).toBe(4);
   });
 
-  it('throttles to 1 per 30s after a peer is discovered', async () => {
+  it('throttles to 1 per steady interval after a peer connects', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
     const provider = await buildProvider();
     const conn = provider.signalingConns[0];
 
-    conn.emit('message', [{ type: 'subscribe', from: 'peer-a', topics: ['room'] }]);
+    provider.emit('peers', [{ webrtcPeers: ['peer-a'], bcPeers: [] }]);
 
     conn.send({ type: 'publish', topic: 'room', data: 'a' });
     conn.send({ type: 'publish', topic: 'room', data: 'b' });
 
-    expect(conn.sendCalls.length).toBe(1);
+    expect(conn.sendCalls.length).toBe(0);
 
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(conn.sendCalls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(conn.sendCalls.length).toBe(0);
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(conn.sendCalls.length).toBe(2);
+    expect(conn.sendCalls.length).toBe(1);
   });
 
   it('sends immediately when a new peer appears after 5 minutes', async () => {
@@ -140,32 +134,31 @@ describe('signaling throttling', () => {
     expect(conn.sendCalls.length).toBe(2);
   });
 
-  it('returns to fast interval after peers go away', async () => {
+  it('returns to discovery interval after peers go away', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
     const provider = await buildProvider();
     const conn = provider.signalingConns[0];
 
-    provider.awareness.states.set('peer-a', {});
-    provider.awareness.emit('change');
+    provider.emit('peers', [{ webrtcPeers: ['peer-a'], bcPeers: [] }]);
+    provider.emit('peers', [{ webrtcPeers: [], bcPeers: [] }]);
 
-    provider.awareness.states.delete('peer-a');
-    provider.awareness.emit('change');
+    await vi.advanceTimersByTimeAsync(15_000);
 
     conn.send({ type: 'publish', topic: 'room', data: 'a' });
     conn.send({ type: 'publish', topic: 'room', data: 'b' });
 
-    expect(conn.sendCalls.length).toBe(1);
+    expect(conn.sendCalls.length).toBe(0);
 
-    await vi.advanceTimersByTimeAsync(14_999);
-    expect(conn.sendCalls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(conn.sendCalls.length).toBe(0);
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(conn.sendCalls.length).toBe(2);
+    expect(conn.sendCalls.length).toBe(1);
   });
 
-  it('does not throttle announce messages after peer discovery', async () => {
+  it('sends announce immediately on peer discovery burst', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
