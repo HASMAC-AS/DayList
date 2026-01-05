@@ -60,10 +60,9 @@ const selectedLabel = computed(() => {
 
 const updateWidth = () => {
   const labelWidth = measureRef.value?.getBoundingClientRect().width || 0;
-  const extra = 56;
-  const minWidth = 120;
+  const extra = 44;
   const maxWidth = typeof window === 'undefined' ? labelWidth + extra : window.innerWidth - 48;
-  dropdownWidth.value = Math.min(maxWidth, Math.max(minWidth, Math.ceil(labelWidth + extra)));
+  dropdownWidth.value = Math.min(maxWidth, Math.max(0, Math.ceil(labelWidth + extra)));
 };
 
 const dropdownStyle = computed(() => {
