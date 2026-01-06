@@ -1,6 +1,9 @@
 <template>
-  <details :open="open" @toggle="$emit('toggle', $event)">
-    <summary>Sync & Backup</summary>
+  <details class="settings-section" :open="open" @toggle="$emit('toggle', $event)">
+    <summary class="settings-summary">
+      <span class="summary-title">Sync & Backup</span>
+      <span class="summary-state" aria-hidden="true"></span>
+    </summary>
     <div class="bd">
       <div class="hint">
         Keys are stored in the URL query for easy sharing:

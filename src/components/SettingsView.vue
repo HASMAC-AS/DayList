@@ -20,63 +20,63 @@
       </div>
     </section>
 
-    <section class="settings-block">
-      <details :open="isOpen('history')" @toggle="(event) => handleToggle('history', event)">
-        <summary>History</summary>
-        <div class="bd">
-          <HistoryPanel />
-        </div>
-      </details>
-    </section>
+    <details class="settings-section" :open="isOpen('history')" @toggle="(event) => handleToggle('history', event)">
+      <summary class="settings-summary">
+        <span class="summary-title">History</span>
+        <span class="summary-state" aria-hidden="true"></span>
+      </summary>
+      <div class="bd">
+        <HistoryPanel />
+      </div>
+    </details>
 
-    <section class="settings-block">
-      <details :open="isOpen('lists')" @toggle="(event) => handleToggle('lists', event)">
-        <summary>Lists</summary>
-        <div class="bd list-manager">
-          <div class="row list-create">
-            <div class="col grow">
-              <div class="hint">List name</div>
-              <input v-model="newListName" type="text" placeholder="e.g., Personal" />
-            </div>
-            <div class="col">
-              <div class="hint">Color</div>
-              <input v-model="newListColor" type="color" aria-label="List color" />
-            </div>
-            <div class="col">
-              <div class="hint">&nbsp;</div>
-              <button class="chip primary" type="button" :disabled="!newListName.trim()" @click="addList">
-                Create
-              </button>
-            </div>
+    <details class="settings-section" :open="isOpen('lists')" @toggle="(event) => handleToggle('lists', event)">
+      <summary class="settings-summary">
+        <span class="summary-title">Lists</span>
+        <span class="summary-state" aria-hidden="true"></span>
+      </summary>
+      <div class="bd list-manager">
+        <div class="row list-create">
+          <div class="col grow">
+            <div class="hint">List name</div>
+            <input v-model="newListName" type="text" placeholder="e.g., Personal" />
           </div>
-
-          <div v-if="store.lists.length === 0" class="empty">No lists yet.</div>
-          <div v-else class="list-items">
-            <div v-for="list in store.lists" :key="list.id" class="row list-row">
-              <span class="list-dot" :style="{ background: list.color }" aria-hidden="true"></span>
-              <input
-                class="grow"
-                type="text"
-                :value="list.name"
-                :placeholder="list.id"
-                @change="(event) => handleListNameChange(list, event)"
-              />
-              <input
-                type="color"
-                :value="list.color"
-                aria-label="List color"
-                @input="(event) => store.setListColor(list.id, (event.target as HTMLInputElement).value)"
-              />
-              <span v-if="list.id === store.activeListId" class="pill">Active</span>
-            </div>
+          <div class="col">
+            <div class="hint">Color</div>
+            <input v-model="newListColor" type="color" aria-label="List color" />
+          </div>
+          <div class="col">
+            <div class="hint">&nbsp;</div>
+            <button class="chip primary" type="button" :disabled="!newListName.trim()" @click="addList">
+              Create
+            </button>
           </div>
         </div>
-      </details>
-    </section>
 
-    <section class="settings-block">
-      <SyncBackupPanel :open="isOpen('sync')" @toggle="(event) => handleToggle('sync', event)" />
-    </section>
+        <div v-if="store.lists.length === 0" class="empty">No lists yet.</div>
+        <div v-else class="list-items">
+          <div v-for="list in store.lists" :key="list.id" class="row list-row">
+            <span class="list-dot" :style="{ background: list.color }" aria-hidden="true"></span>
+            <input
+              class="grow"
+              type="text"
+              :value="list.name"
+              :placeholder="list.id"
+              @change="(event) => handleListNameChange(list, event)"
+            />
+            <input
+              type="color"
+              :value="list.color"
+              aria-label="List color"
+              @input="(event) => store.setListColor(list.id, (event.target as HTMLInputElement).value)"
+            />
+            <span v-if="list.id === store.activeListId" class="pill">Active</span>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <SyncBackupPanel :open="isOpen('sync')" @toggle="(event) => handleToggle('sync', event)" />
 
     <section class="settings-block settings-actions-bottom">
       <button class="chip ghost" type="button" :disabled="reloading" @click="reloadApp">Reload</button>
