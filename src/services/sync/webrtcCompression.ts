@@ -1,4 +1,5 @@
 import Peer from 'simple-peer/simplepeer.min.js';
+import { deflateSync, gzipSync, inflateSync, ungzipSync } from 'fflate';
 import { errToObj } from '../../lib/core';
 
 type CompressionFormat = 'deflate' | 'gzip';
@@ -13,9 +14,6 @@ const TYPE_TEXT = 1;
 const sendQueue = new WeakMap<object, Promise<void>>();
 const recvQueue = new WeakMap<object, Promise<void>>();
 let patched = false;
-
-const supportsCompression = () =>
-  typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
 
 const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
 const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
@@ -35,23 +33,11 @@ const toUint8 = async (input: unknown): Promise<Uint8Array> => {
 const toArrayBuffer = (data: Uint8Array) =>
   data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
 
-const compress = async (payload: Uint8Array, format: CompressionFormat) => {
-  const stream = new CompressionStream(format);
-  const writer = stream.writable.getWriter();
-  await writer.write(payload);
-  await writer.close();
-  const buffer = await new Response(stream.readable).arrayBuffer();
-  return new Uint8Array(buffer);
-};
+const compress = async (payload: Uint8Array, format: CompressionFormat) =>
+  format === 'gzip' ? gzipSync(payload) : deflateSync(payload);
 
-const decompress = async (payload: Uint8Array, format: CompressionFormat) => {
-  const stream = new DecompressionStream(format);
-  const writer = stream.writable.getWriter();
-  await writer.write(payload);
-  await writer.close();
-  const buffer = await new Response(stream.readable).arrayBuffer();
-  return new Uint8Array(buffer);
-};
+const decompress = async (payload: Uint8Array, format: CompressionFormat) =>
+  format === 'gzip' ? ungzipSync(payload) : inflateSync(payload);
 
 const packPayload = async (input: unknown) => {
   if (typeof input === 'string') {
@@ -104,10 +90,6 @@ const handleCompressionError = (peer: any, error: unknown, stage: 'send' | 'recv
 export function ensureWebrtcCompression(opts?: { format?: CompressionFormat; onLog?: LogFn }) {
   if (patched) return;
   if (typeof RTCPeerConnection === 'undefined') return;
-  if (!supportsCompression()) {
-    opts?.onLog?.('webrtc:compression_missing', { reason: 'CompressionStream unavailable.' }, 'ERROR');
-    throw new Error('WebRTC compression requires CompressionStream/DecompressionStream support.');
-  }
 
   const format = opts?.format ?? DEFAULT_FORMAT;
   patched = true;
