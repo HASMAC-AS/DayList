@@ -81,6 +81,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       return false;
     }
   })();
+  const IOS_BACKGROUND_GRACE_MS = 20_000;
 
   const keys = reactive<SyncKeys>({
     room: '',
@@ -644,7 +645,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       // iOS WebKit frequently resumes with half-open sockets / ICE state. This manifests as
       // "Sync: on" but no updates until a full page reload. Force a full provider restart
       // on resume from background, and also when signaling looks stale.
-      if (isIOSLike && (sleptMs > 0 || staleSignal)) {
+      if (isIOSLike && (staleSignal || sleptMs > IOS_BACKGROUND_GRACE_MS)) {
         logEvent('sync:resume_ios_hard', { reason, sleptMs, ageMs: age, staleSignal });
         hardReconnect(`resume:${reason}`);
         return;
