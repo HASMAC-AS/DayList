@@ -1386,10 +1386,23 @@ export const useDaylistStore = defineStore('daylist', () => {
       const staleSignal = lastSignal > 0 && now - lastSignal > 25_000;
       const neverSignaled = lastSignal === 0 && initialized.value;
       const recentLocalChange = lastLocalChangeAt.value > 0 && now - lastLocalChangeAt.value < 6000;
+      const connectedPeerCount = Object.values(peerStates).filter((state) => state.connected).length;
+      const hasActivePeers = connectedPeerCount > 0 || peerCount.value > 0;
       if (staleSignal) {
-        if (navigator.onLine) hardReconnect('watchdog:stale_signal');
-        else resumeSync('watchdog:stale_signal');
-      } else if (!providerConnected.value && (staleSignal || neverSignaled)) {
+        if (hasActivePeers) {
+          logEvent('sync:watchdog_skip_active_peers', {
+            ageMs: now - lastSignal,
+            peerCount: peerCount.value,
+            connectedPeerCount,
+            webrtcPeers: webrtcPeers.value.length,
+            bcPeers: bcPeers.value.length
+          });
+        } else if (navigator.onLine) {
+          hardReconnect('watchdog:stale_signal');
+        } else {
+          resumeSync('watchdog:stale_signal');
+        }
+      } else if (!providerConnected.value && !hasActivePeers && (staleSignal || neverSignaled)) {
         resumeSync('watchdog:disconnected');
       } else if (
         peerCount.value === 0 &&

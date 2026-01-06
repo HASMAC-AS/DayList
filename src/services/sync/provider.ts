@@ -59,6 +59,7 @@ export async function connectProvider(opts: {
   const LOW_BURST_COUNT = 3;
   const PEER_STALE_MS = 20_000;
   const PEER_IDLE_RESET_MS = 15_000;
+  const PEER_RECOVERY_WINDOW_MS = 20_000;
   const STALE_CHECK_INTERVAL_MS = 5_000;
   const RESYNC_RETRY_MS = 500;
   const RESYNC_MAX_ATTEMPTS = 12;
@@ -72,6 +73,7 @@ export async function connectProvider(opts: {
   let lowBurstTokens = 0;
   let mode: 'discovery' | 'steady' = 'discovery';
   let peerIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  let peerRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   const peerLastSeenAt = new Map<string, number>();
   const peerSeenOnConn = new Map<string, string>();
   const pendingPeers = new Set<string>();
@@ -146,6 +148,13 @@ export async function connectProvider(opts: {
     }
   };
 
+  const clearPeerRecoveryTimer = () => {
+    if (peerRecoveryTimer != null) {
+      clearTimeout(peerRecoveryTimer);
+      peerRecoveryTimer = null;
+    }
+  };
+
   const schedulePeerIdleReset = (reason: string) => {
     if (peerIdleTimer != null) return;
     peerIdleTimer = setTimeout(() => {
@@ -153,6 +162,33 @@ export async function connectProvider(opts: {
       setMode('discovery', `peer_idle:${reason}`);
     }, PEER_IDLE_RESET_MS);
     opts.onLog?.('signal:peer_idle_scheduled', { reason, afterMs: PEER_IDLE_RESET_MS });
+  };
+
+  const schedulePeerRecovery = (reason: string, webrtcTotal: number) => {
+    clearPeerRecoveryTimer();
+    peerRecoveryTimer = setTimeout(() => {
+      peerRecoveryTimer = null;
+      if (webrtcTotal > 0 && connectedPeers.size > 0) {
+        setMode('steady', `peer_recovery_done:${reason}`);
+      }
+    }, PEER_RECOVERY_WINDOW_MS);
+    opts.onLog?.('signal:peer_recovery', { reason, windowMs: PEER_RECOVERY_WINDOW_MS, webrtcTotal });
+  };
+
+  const updateModeForPeers = (webrtcTotal: number, reason: string) => {
+    if (webrtcTotal <= 0) return;
+    if (connectedPeers.size === 0) {
+      setMode('discovery', `webrtc_waiting:${reason}`);
+      return;
+    }
+    if (connectedPeers.size < webrtcTotal) {
+      setMode('discovery', `webrtc_partial:${reason}`);
+      grantLowBurst('webrtc_partial', 6);
+      schedulePeerRecovery(`webrtc_partial:${reason}`, webrtcTotal);
+      return;
+    }
+    clearPeerRecoveryTimer();
+    setMode('steady', `webrtc_connected:${reason}`);
   };
 
   const flushLowBurst = () => {
@@ -451,6 +487,7 @@ export async function connectProvider(opts: {
       staleInterval = null;
     }
     clearPeerIdleTimer();
+    clearPeerRecoveryTimer();
     if (lowTimer != null) {
       clearTimeout(lowTimer);
       lowTimer = null;
@@ -509,10 +546,9 @@ export async function connectProvider(opts: {
       connectedPeers.forEach((peerId) => {
         if (!webrtcList.includes(peerId)) connectedPeers.delete(peerId);
       });
-      if (connectedPeers.size > 0) {
-        setMode('steady', 'webrtc_connected');
-      }
+      updateModeForPeers(webrtcList.length, 'peers');
     } else {
+      clearPeerRecoveryTimer();
       schedulePeerIdleReset('webrtc_empty');
     }
 
@@ -532,7 +568,7 @@ export async function connectProvider(opts: {
             emitPeerState({ peerId, event: 'peer_connected', connected: true });
             requestResync(peerId, 'peer_connect');
             clearPeerIdleTimer();
-            setMode('steady', 'webrtc_connected');
+            updateModeForPeers(room?.webrtcConns?.size ?? connectedPeers.size, 'peer_connect');
           });
           peer.on('close', () => {
             connectedPeers.delete(peerId);
