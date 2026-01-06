@@ -61,6 +61,7 @@
         </div>
         <div class="col">
           <button id="copySettingsBtn" @click="copySettingsJson">Copy JSON</button>
+          <button id="pasteSettingsBtn" @click="pasteSettingsJson">Paste JSON</button>
           <button id="applySettingsBtn" @click="applySettingsJson">Apply JSON</button>
         </div>
       </div>
@@ -74,11 +75,14 @@
 
       <div class="row">
         <button id="exportBtn" @click="exportSnapshot">Export JSON</button>
-        <button id="copyLinkBtn" @click="copyLink">Copy link</button>
         <label class="chip" style="cursor: pointer">
           Import JSON
           <input id="importFile" type="file" accept="application/json" style="display: none" @change="importSnapshot" />
         </label>
+        <button id="copyLinkBtn" @click="copyLink">Copy link</button>
+      </div>
+
+      <div class="row" style="margin-top: 8px">
         <button class="danger" id="wipeBtn" @click="wipeLocal">Wipe local data</button>
       </div>
 
@@ -93,7 +97,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useDaylistStore } from '../stores/daylist';
-import { persistKeysToStorage, writeKeysToUrl } from '../services/sync/keys';
+import { buildUrlWithKeys, persistKeysToStorage, writeKeysToUrl } from '../services/sync/keys';
 import { useToastBus } from '../services/toast';
 
 defineProps<{ open?: boolean }>();
@@ -145,31 +149,56 @@ const applyTurnToggle = async () => {
   await store.connectSync();
 };
 
-const applySettingsJson = async () => {
+const parseSettingsPayload = (raw: string) => {
   try {
-    const parsed = JSON.parse(settingsJsonDraft.value || '{}');
-    const payload = parsed && typeof parsed === 'object' && 'keys' in parsed ? parsed.keys : parsed;
-    if (!payload || typeof payload !== 'object') {
-      toast('Invalid settings JSON');
-      return;
-    }
-    const next = payload as Partial<{
-      room: string;
-      enc: string;
-      sig: string;
-      turnKey: string;
-      turnEnabled: boolean;
-    }>;
-    if (typeof next.room === 'string') store.keys.room = next.room;
-    if (typeof next.enc === 'string') store.keys.enc = next.enc;
-    if (typeof next.sig === 'string') store.keys.sig = next.sig;
-    if (typeof next.turnKey === 'string') store.keys.turnKey = next.turnKey;
-    if (typeof next.turnEnabled === 'boolean') store.keys.turnEnabled = next.turnEnabled;
-    await store.connectSync();
-    toast('Settings applied');
+    const parsed = JSON.parse(raw || '{}');
+    return parsed && typeof parsed === 'object' && 'keys' in parsed ? parsed.keys : parsed;
   } catch {
-    toast('Settings JSON invalid');
+    return null;
   }
+};
+
+const applySettingsPayload = (payload: unknown) => {
+  if (!payload || typeof payload !== 'object') {
+    toast('Invalid settings JSON');
+    return;
+  }
+  const next = payload as Partial<{
+    room: string;
+    enc: string;
+    sig: string;
+    turnKey: string;
+    turnEnabled: boolean;
+  }>;
+  if (typeof next.room === 'string') store.keys.room = next.room;
+  if (typeof next.enc === 'string') store.keys.enc = next.enc;
+  if (typeof next.sig === 'string') store.keys.sig = next.sig;
+  if (typeof next.turnKey === 'string') store.keys.turnKey = next.turnKey;
+  if (typeof next.turnEnabled === 'boolean') store.keys.turnEnabled = next.turnEnabled;
+  persistKeysToStorage(localStorage, store.keys);
+  const nextUrl = buildUrlWithKeys(store.keys);
+  window.location.href = nextUrl;
+};
+
+const applySettingsJson = async () => {
+  const payload = parseSettingsPayload(settingsJsonDraft.value || '');
+  applySettingsPayload(payload);
+};
+
+const pasteSettingsJson = async () => {
+  let raw = '';
+  try {
+    raw = await navigator.clipboard.readText();
+  } catch {
+    raw = window.prompt('Paste settings JSON:', '') || '';
+  }
+  if (!raw.trim()) {
+    toast('Clipboard empty');
+    return;
+  }
+  settingsJsonDraft.value = raw;
+  const payload = parseSettingsPayload(raw);
+  applySettingsPayload(payload);
 };
 
 const exportSnapshot = () => {

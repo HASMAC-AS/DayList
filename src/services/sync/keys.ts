@@ -46,31 +46,36 @@ export function readKeysFromUrl(locationHref: string): Partial<SyncKeys> {
 
 export function writeKeysToUrl(keys: Partial<SyncKeys>) {
   try {
-    const url = new URL(window.location.href);
-
-    if (keys.room != null) url.searchParams.set(Q_ROOM, keys.room);
-    if (keys.enc != null) url.searchParams.set(Q_ENC, keys.enc);
-
-    if (keys.sig != null) {
-      const clean = String(keys.sig).trim();
-      if (clean) url.searchParams.set(Q_SIG, clean);
-      else url.searchParams.delete(Q_SIG);
-    }
-
-    if (keys.turnKey != null) {
-      const clean = String(keys.turnKey).trim();
-      if (clean) url.searchParams.set(Q_TURN, clean);
-      else url.searchParams.delete(Q_TURN);
-    }
-
-    if (keys.turnEnabled != null) {
-      url.searchParams.set(Q_TURN_ENABLED, keys.turnEnabled ? '1' : '0');
-    }
-
-    history.replaceState({}, '', url.toString());
+    const url = buildUrlWithKeys(keys);
+    history.replaceState({}, '', url);
   } catch {
     // ignore
   }
+}
+
+export function buildUrlWithKeys(keys: Partial<SyncKeys>, href: string = window.location.href) {
+  const url = new URL(href);
+
+  if (keys.room != null) url.searchParams.set(Q_ROOM, keys.room);
+  if (keys.enc != null) url.searchParams.set(Q_ENC, keys.enc);
+
+  if (keys.sig != null) {
+    const clean = String(keys.sig).trim();
+    if (clean) url.searchParams.set(Q_SIG, clean);
+    else url.searchParams.delete(Q_SIG);
+  }
+
+  if (keys.turnKey != null) {
+    const clean = String(keys.turnKey).trim();
+    if (clean) url.searchParams.set(Q_TURN, clean);
+    else url.searchParams.delete(Q_TURN);
+  }
+
+  if (keys.turnEnabled != null) {
+    url.searchParams.set(Q_TURN_ENABLED, keys.turnEnabled ? '1' : '0');
+  }
+
+  return url.toString();
 }
 
 export function readKeysFromStorage(storage: Storage): Partial<SyncKeys> {

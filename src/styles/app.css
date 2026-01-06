@@ -421,6 +421,18 @@ h1 {
   box-shadow: var(--shadow);
 }
 
+.settings-view button,
+.settings-view .chip {
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-view button.danger {
+  color: #9f1239;
+}
+
 .list-manager {
   display: flex;
   flex-direction: column;
