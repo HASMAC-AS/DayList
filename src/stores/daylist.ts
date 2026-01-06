@@ -19,6 +19,7 @@ import {
   toDatetimeLocalValue,
   toJsonSafe
 } from '../lib/core';
+import { shouldWaitForPeers } from '../lib/sync';
 import {
   DEFAULT_LIST_COLOR,
   DEFAULT_LIST_ID,
@@ -113,6 +114,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const signalingLastMessageAt = ref(0);
   const webrtcPeers = ref<string[]>([]);
   const bcPeers = ref<string[]>([]);
+  const lastPeerListAt = ref(0);
   const peerStates = reactive<
     Record<
       string,
@@ -569,7 +571,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     connectSync();
   };
 
-  const kickSignaling = (reason: string) => {
+  const kickSignaling = (reason: string, options: { bypassPendingPeers?: boolean } = {}) => {
     const now = Date.now();
     if (now - lastKickAt < 4000) return;
     lastKickAt = now;
@@ -578,7 +580,14 @@ export const useDaylistStore = defineStore('daylist', () => {
       connectSync();
       return;
     }
-    if (webrtcPeers.value.length > 0 || bcPeers.value.length > 0) {
+    const shouldWait = shouldWaitForPeers({
+      peerCount: peerCount.value,
+      webrtcPeers: webrtcPeers.value,
+      bcPeers: bcPeers.value,
+      lastPeerListAt: lastPeerListAt.value,
+      now
+    });
+    if (shouldWait && !options.bypassPendingPeers) {
       logEvent('sync:kick_skip_pending_peers', {
         reason,
         webrtcPeers: webrtcPeers.value.length,
@@ -623,6 +632,16 @@ export const useDaylistStore = defineStore('daylist', () => {
       const age = signalingLastMessageAt.value ? now - signalingLastMessageAt.value : Infinity;
       const signalOk = hasSignalingConnection();
       const staleSignal = signalingLastMessageAt.value > 0 && age > 25_000;
+      const pendingPeers = webrtcPeers.value.length > 0 || bcPeers.value.length > 0;
+      const shouldWait = shouldWaitForPeers({
+        peerCount: peerCount.value,
+        webrtcPeers: webrtcPeers.value,
+        bcPeers: bcPeers.value,
+        lastPeerListAt: lastPeerListAt.value,
+        now,
+        sleptMs
+      });
+      const peerListAgeMs = lastPeerListAt.value ? now - lastPeerListAt.value : null;
 
       // iOS WebKit frequently resumes with half-open sockets / ICE state. This manifests as
       // "Sync: on" but no updates until a full page reload. Force a full provider restart
@@ -638,15 +657,19 @@ export const useDaylistStore = defineStore('daylist', () => {
       }
 
       if (peerCount.value === 0) {
-        if (webrtcPeers.value.length > 0 || bcPeers.value.length > 0) {
+        if (shouldWait) {
           logEvent('sync:resume_waiting_peers', {
             reason,
             webrtcPeers: webrtcPeers.value.length,
-            bcPeers: bcPeers.value.length
+            bcPeers: bcPeers.value.length,
+            peerListAgeMs
           });
           return;
         }
-        kickSignaling(`resume:${reason}`);
+        if (pendingPeers) {
+          logEvent('sync:resume_stale_peers', { reason, peerListAgeMs, sleptMs });
+        }
+        kickSignaling(`resume:${reason}`, { bypassPendingPeers: pendingPeers });
         return;
       }
 
@@ -696,6 +719,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     providerConnected.value = false;
     webrtcPeers.value = [];
     bcPeers.value = [];
+    lastPeerListAt.value = 0;
     Object.keys(peerStates).forEach((peerId) => {
       delete peerStates[peerId];
     });
@@ -734,6 +758,7 @@ export const useDaylistStore = defineStore('daylist', () => {
         webrtcPeers.value = nextWebrtc;
         bcPeers.value = peers.bcPeers;
         const now = Date.now();
+        lastPeerListAt.value = now;
         nextWebrtc.forEach((peerId) => {
           if (!peerStates[peerId]) {
             peerStates[peerId] = {
