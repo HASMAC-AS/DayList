@@ -6,7 +6,7 @@ type CompressionFormat = 'deflate' | 'gzip';
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 type LogFn = (event: string, data?: unknown, level?: LogLevel) => void;
 
-const DEFAULT_FORMAT: CompressionFormat = 'deflate';
+const DEFAULT_FORMAT: CompressionFormat = 'gzip';
 const TYPE_BINARY = 0;
 const TYPE_TEXT = 1;
 
@@ -109,8 +109,9 @@ export function ensureWebrtcCompression(opts?: { format?: CompressionFormat; onL
     throw new Error('WebRTC compression requires CompressionStream/DecompressionStream support.');
   }
 
-  patched = true;
   const format = opts?.format ?? DEFAULT_FORMAT;
+  patched = true;
+  opts?.onLog?.('webrtc:compression_enabled', { format });
   const originalSend = Peer.prototype.send;
   const originalOnChannelMessage = Peer.prototype._onChannelMessage;
 
