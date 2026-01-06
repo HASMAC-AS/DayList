@@ -21,7 +21,7 @@
     </section>
 
     <section class="settings-block">
-      <details>
+      <details :open="isOpen('history')" @toggle="(event) => handleToggle('history', event)">
         <summary>History</summary>
         <div class="bd">
           <HistoryPanel />
@@ -30,7 +30,7 @@
     </section>
 
     <section class="settings-block">
-      <details>
+      <details :open="isOpen('lists')" @toggle="(event) => handleToggle('lists', event)">
         <summary>Lists</summary>
         <div class="bd list-manager">
           <div class="row list-create">
@@ -75,7 +75,7 @@
     </section>
 
     <section class="settings-block">
-      <SyncBackupPanel />
+      <SyncBackupPanel :open="isOpen('sync')" @toggle="(event) => handleToggle('sync', event)" />
     </section>
 
     <section class="settings-block settings-actions-bottom">
@@ -97,11 +97,21 @@ import SyncBackupPanel from './SyncBackupPanel.vue';
 
 defineEmits<{ openDiagnostics: [] }>();
 
+const SETTINGS_SECTION_KEY = 'daylist.settings.openSection.v1';
 const store = useDaylistStore();
 const sections = computed(() => buildTodaySections(store.tasksForActiveList, store.nowTs));
 const reloading = ref(false);
 const newListName = ref('');
 const newListColor = ref(DEFAULT_LIST_COLOR);
+const openSection = ref<string | null>(
+  (() => {
+    try {
+      return localStorage.getItem(SETTINGS_SECTION_KEY);
+    } catch {
+      return null;
+    }
+  })()
+);
 
 const addList = () => {
   const id = store.createList({ name: newListName.value, color: newListColor.value, meta: {} });
@@ -131,5 +141,23 @@ const reloadApp = () => {
     window.location.href = window.location.href;
     window.location.reload();
   }, 50);
+};
+
+const isOpen = (section: string) => openSection.value === section;
+
+const handleToggle = (section: string, event: Event) => {
+  const details = event.target as HTMLDetailsElement | null;
+  if (!details) return;
+  if (details.open) {
+    openSection.value = section;
+  } else if (openSection.value === section) {
+    openSection.value = null;
+  }
+  try {
+    if (openSection.value) localStorage.setItem(SETTINGS_SECTION_KEY, openSection.value);
+    else localStorage.removeItem(SETTINGS_SECTION_KEY);
+  } catch {
+    // ignore storage failures
+  }
 };
 </script>

@@ -1,5 +1,5 @@
 <template>
-  <details>
+  <details :open="open" @toggle="$emit('toggle', $event)">
     <summary>Sync & Backup</summary>
     <div class="bd">
       <div class="hint">
@@ -18,7 +18,6 @@
           <input id="encInput" v-model="store.keys.enc" type="password" placeholder="required" />
         </div>
         <button id="reconnectBtn" @click="store.connectSync">Reconnect</button>
-        <button id="copyLinkBtn" @click="copyLink">Copy link</button>
       </div>
 
       <div class="row" style="align-items: flex-end; margin-top: 10px">
@@ -75,6 +74,7 @@
 
       <div class="row">
         <button id="exportBtn" @click="exportSnapshot">Export JSON</button>
+        <button id="copyLinkBtn" @click="copyLink">Copy link</button>
         <label class="chip" style="cursor: pointer">
           Import JSON
           <input id="importFile" type="file" accept="application/json" style="display: none" @change="importSnapshot" />
@@ -95,6 +95,9 @@ import { computed, ref, watch } from 'vue';
 import { useDaylistStore } from '../stores/daylist';
 import { persistKeysToStorage, writeKeysToUrl } from '../services/sync/keys';
 import { useToastBus } from '../services/toast';
+
+defineProps<{ open?: boolean }>();
+defineEmits<{ toggle: [Event] }>();
 
 const store = useDaylistStore();
 const { show: toast } = useToastBus();
