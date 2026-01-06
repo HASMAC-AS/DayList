@@ -6,7 +6,7 @@
       @select-list="store.setActiveList"
     />
 
-    <transition name="view-fade" mode="out-in">
+  <transition name="view-fade" mode="out-in" @before-enter="applyPendingScroll">
       <div v-if="view === 'main'" key="main" class="main-view">
         <TaskListMain />
       </div>
@@ -62,7 +62,7 @@
     </div>
   </transition>
 
-  <div v-if="!syncReady" class="sync-indicator" role="status" aria-live="polite">
+  <div v-if="!syncReady && showSyncIndicator" class="sync-indicator" role="status" aria-live="polite">
     <span class="sync-spinner" aria-hidden="true"></span>
     connecting
   </div>
@@ -71,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ArrowLeft, Settings2 } from 'lucide-vue-next';
 import TaskComposer from './components/TaskComposer.vue';
 import TaskListMain from './components/TaskListMain.vue';
@@ -87,20 +87,99 @@ const view = ref<'main' | 'settings' | 'diagnostics'>('main');
 const composerOpen = ref(false);
 const syncReady = computed(() => store.syncReady);
 const listColor = computed(() => store.activeList?.color || DEFAULT_LIST_COLOR);
+const pendingScrollY = ref<number | null>(null);
+let scrollTicking = false;
+const showSyncIndicator = ref(false);
+let syncDelayTimer: number | null = null;
+let syncInteractionListening = false;
+const syncInteractionOptions: AddEventListenerOptions = { capture: true };
 
 const BASE_ACCENT_LIGHT = '#1f4b99';
 const BASE_ACCENT_DARK = '#6ea8ff';
 
-const ensureHistoryState = (next: 'main' | 'settings' | 'diagnostics', replace = false) => {
-  const state = { ...(history.state || {}), view: next };
+const getScrollY = () => window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+
+const ensureHistoryState = (next: 'main' | 'settings' | 'diagnostics', replace = false, scrollY = 0) => {
+  const state = { ...(history.state || {}), view: next, scrollY };
   if (replace) history.replaceState(state, '', window.location.href);
   else history.pushState(state, '', window.location.href);
 };
 
-const setView = (next: 'main' | 'settings' | 'diagnostics', fromPop = false) => {
+const updateHistoryScroll = () => {
+  if (!history.state) return;
+  const scrollY = getScrollY();
+  history.replaceState({ ...history.state, scrollY }, '', window.location.href);
+};
+
+const queueScrollRestore = (scrollY: number) => {
+  pendingScrollY.value = scrollY;
+};
+
+const applyPendingScroll = () => {
+  if (pendingScrollY.value == null) return;
+  const target = pendingScrollY.value;
+  pendingScrollY.value = null;
+  window.scrollTo(0, target);
+};
+
+const handleScroll = () => {
+  if (scrollTicking) return;
+  scrollTicking = true;
+  requestAnimationFrame(() => {
+    scrollTicking = false;
+    updateHistoryScroll();
+  });
+};
+
+const clearSyncDelay = () => {
+  if (syncDelayTimer !== null) {
+    window.clearTimeout(syncDelayTimer);
+    syncDelayTimer = null;
+  }
+};
+
+const handleSyncInteraction = () => {
+  if (syncReady.value) return;
+  showSyncIndicator.value = true;
+  if (syncInteractionListening) {
+    document.removeEventListener('pointerdown', handleSyncInteraction, syncInteractionOptions);
+    syncInteractionListening = false;
+  }
+};
+
+const startSyncWait = () => {
+  showSyncIndicator.value = false;
+  clearSyncDelay();
+  syncDelayTimer = window.setTimeout(() => {
+    if (!syncReady.value) {
+      showSyncIndicator.value = true;
+    }
+  }, 5000);
+  if (!syncInteractionListening) {
+    document.addEventListener('pointerdown', handleSyncInteraction, syncInteractionOptions);
+    syncInteractionListening = true;
+  }
+};
+
+const stopSyncWait = () => {
+  clearSyncDelay();
+  showSyncIndicator.value = false;
+  if (syncInteractionListening) {
+    document.removeEventListener('pointerdown', handleSyncInteraction, syncInteractionOptions);
+    syncInteractionListening = false;
+  }
+};
+
+const setView = (next: 'main' | 'settings' | 'diagnostics', fromPop = false, scrollY = 0) => {
   if (view.value === next) return;
+  if (fromPop) {
+    queueScrollRestore(scrollY);
+  } else {
+    updateHistoryScroll();
+    queueScrollRestore(0);
+  }
   view.value = next;
-  if (!fromPop) ensureHistoryState(next);
+  if (!fromPop) ensureHistoryState(next, false, 0);
 };
 
 const navigateTo = (next: 'main' | 'settings' | 'diagnostics') => {
@@ -108,15 +187,30 @@ const navigateTo = (next: 'main' | 'settings' | 'diagnostics') => {
 };
 
 onMounted(() => {
+  if ('scrollRestoration' in history) {
+    history.scrollRestoration = 'manual';
+  }
   const initial = (history.state && history.state.view) || 'main';
   view.value = initial;
-  ensureHistoryState(initial, true);
+  ensureHistoryState(initial, true, getScrollY());
   window.addEventListener('popstate', (event) => {
     const next = (event.state && event.state.view) || 'main';
-    setView(next, true);
+    const scrollY = typeof event.state?.scrollY === 'number' ? event.state.scrollY : 0;
+    setView(next, true, scrollY);
   });
+  window.addEventListener('scroll', handleScroll, { passive: true });
   store.initApp();
 });
+
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', handleScroll);
+  stopSyncWait();
+});
+
+watch(syncReady, (ready) => {
+  if (ready) stopSyncWait();
+  else startSyncWait();
+}, { immediate: true });
 
 const clamp = (value: number) => Math.max(0, Math.min(255, Math.round(value)));
 
