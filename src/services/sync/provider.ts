@@ -174,11 +174,19 @@ export async function connectProvider(opts: {
 
   const classifyOutgoing = (message: unknown): 'immediate' | 'low' => {
     if (!message || typeof message !== 'object') return 'immediate';
-    const msg = message as { type?: string; to?: string; topic?: string };
-    if (msg.type && msg.type !== 'publish') return 'immediate';
+    const msg = message as { type?: string; topic?: string; data?: unknown };
     if (msg.type !== 'publish') return 'immediate';
-    if (msg.to) return 'immediate';
     if (msg.topic && msg.topic !== opts.room) return 'immediate';
+    const data = msg.data;
+    if (typeof data === 'string') {
+      // Encrypted payloads may contain direct signals; don't throttle them.
+      return 'immediate';
+    }
+    if (data && typeof data === 'object') {
+      const payload = data as { to?: unknown; type?: unknown };
+      if (payload.to) return 'immediate';
+      if (payload.type === 'signal') return 'immediate';
+    }
     return 'low';
   };
 
@@ -341,6 +349,11 @@ export async function connectProvider(opts: {
     opts.onPeerSeen?.({ peerId, reason, at: now, detail });
     if (isNew || isStale) {
       grantLowBurst(isNew ? 'peer_new' : 'peer_stale');
+      const shouldConnect = reason !== 'signal:signal' && reason !== 'signal:welcome' && reason !== 'signal:subscribe';
+      if (!shouldConnect) {
+        logConnectAttempt(peerId, isNew ? 'new_peer' : 'stale_peer', detail, 'skip_policy');
+        return;
+      }
       ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
     }
   };
@@ -597,22 +610,30 @@ export async function connectProvider(opts: {
 
       if (msg.type === 'publish' && hasTopic) {
         if (msg.data && typeof msg.data === 'object') {
-          const data = msg.data as { from?: unknown; type?: unknown };
+          const data = msg.data as { from?: unknown; type?: unknown; signal?: unknown };
           const peerId = typeof data.from === 'string' ? data.from : '';
           if (peerId) {
             recordPeerSeen(peerId, conn, `signal:${typeof data.type === 'string' ? data.type : 'from'}`, {
-              type: data.type
+              type: data.type,
+              signalType:
+                data && typeof data.signal === 'object' && data.signal && 'type' in (data.signal as { type?: unknown })
+                  ? (data.signal as { type?: unknown }).type
+                  : undefined
             });
           }
         } else if (typeof msg.data === 'string') {
           decryptSignalPayload(msg.data)
             .then((decrypted) => {
               if (!decrypted || typeof decrypted !== 'object') return;
-              const data = decrypted as { from?: unknown; type?: unknown };
+              const data = decrypted as { from?: unknown; type?: unknown; signal?: unknown };
               const peerId = typeof data.from === 'string' ? data.from : '';
               if (!peerId) return;
               recordPeerSeen(peerId, conn, `signal:${typeof data.type === 'string' ? data.type : 'from'}`, {
-                type: data.type
+                type: data.type,
+                signalType:
+                  data && typeof data.signal === 'object' && data.signal && 'type' in (data.signal as { type?: unknown })
+                    ? (data.signal as { type?: unknown }).type
+                    : undefined
               });
             })
             .catch(() => {});
