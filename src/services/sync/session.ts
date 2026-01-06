@@ -51,6 +51,7 @@ export async function createSyncSession(opts: {
   let lastPeerSeenAt = 0;
   let upgradeTimer: ReturnType<typeof setTimeout> | null = null;
   let upgradeStartAt = 0;
+  let pendingUpgrade: { target: IceConfig; reason: string } | null = null;
   let disposed = false;
 
   const iceServersEqual = (a: RTCIceServer[], b: RTCIceServer[]) => {
@@ -85,6 +86,9 @@ export async function createSyncSession(opts: {
     opts.onPeers?.({ webrtcPeers: [], bcPeers: [] });
     currentConfig = config;
     bestConfig = config;
+    if (pendingUpgrade && iceConfigEqual(pendingUpgrade.target, config)) {
+      pendingUpgrade = null;
+    }
     opts.onIce?.({ config, reason });
     provider = await connectProvider({
       doc: opts.doc,
@@ -107,6 +111,8 @@ export async function createSyncSession(opts: {
         if (webrtcPeers.length > 0) {
           clearUpgradeTimer();
           upgradeStartAt = 0;
+        } else if (pendingUpgrade && !upgradeTimer) {
+          scheduleUpgrade(pendingUpgrade.target, pendingUpgrade.reason);
         }
         opts.onPeers?.(peers);
       },
@@ -135,6 +141,7 @@ export async function createSyncSession(opts: {
     const ts = now();
     if (webrtcPeers.length > 0) {
       opts.onLog?.('ice:upgrade_skip_peers', { reason, peers: webrtcPeers.length });
+      pendingUpgrade = { target, reason };
       clearUpgradeTimer();
       upgradeStartAt = 0;
       return;
@@ -150,6 +157,7 @@ export async function createSyncSession(opts: {
     }
     opts.onLog?.('ice:upgrade_connecting', { reason, target: target.mode });
     await buildProvider(target, `ice_upgrade:${reason}`);
+    pendingUpgrade = null;
     clearUpgradeTimer();
     upgradeStartAt = 0;
   };
@@ -191,12 +199,15 @@ export async function createSyncSession(opts: {
           bestConfig = target;
           if (iceConfigEqual(currentConfig, target)) {
             opts.onLog?.('ice:upgrade_skip_same', { target: target.mode });
+            pendingUpgrade = null;
             return;
           }
           if (webrtcPeers.length > 0) {
             opts.onLog?.('ice:upgrade_skip_peers', { peers: webrtcPeers.length });
+            pendingUpgrade = { target, reason: refresh.source };
             return;
           }
+          pendingUpgrade = { target, reason: refresh.source };
           scheduleUpgrade(target, refresh.source);
         })
         .catch((error) => {
