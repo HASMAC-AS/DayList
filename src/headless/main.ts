@@ -2,7 +2,6 @@ import type { WebrtcProvider } from 'y-webrtc';
 import { errToObj, parseSignalingList, redact } from '../lib/core';
 import { DEFAULT_SIGNALING } from '../services/sync/defaults';
 import { resolveKeysStrict } from '../services/sync/keys';
-import { createRateLimitedFetch } from '../services/sync/netThrottle';
 import { getPeerCount, type SignalingStatus } from '../services/sync/provider';
 import { createSyncSession } from '../services/sync/session';
 import { importSnapshot, loadSnapshotFromStorage } from '../services/sync/snapshot';
@@ -111,7 +110,6 @@ const main = async () => {
   });
   setStatus({ signaling: Array.from(signalingByUrl.values()) });
 
-  const throttledFetch = createRateLimitedFetch(fetch, 300);
   let provider: WebrtcProvider | null = null;
   const updatePeers = (fallback?: { webrtcPeers: string[]; bcPeers: string[] }) => {
     if (provider) {
@@ -130,7 +128,7 @@ const main = async () => {
     signaling,
     turnKey: keys.turnKey,
     turnEnabled: keys.turnEnabled !== false,
-    fetchFn: throttledFetch,
+    fetchFn: fetch,
     storage: localStorage,
     platform: { isIPhone: false },
     onProvider: (next) => {

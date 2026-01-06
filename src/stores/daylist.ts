@@ -41,7 +41,6 @@ import type {
   SnapshotKeys
 } from '../lib/types';
 import { createDebugLogger, bindDebugWindow, type DebugLogger } from '../services/sync/debugLog';
-import { createRateLimitedFetch } from '../services/sync/netThrottle';
 import { getPeerCount, type PeerConnectionUpdate, type SignalingStatus } from '../services/sync/provider';
 import { createSyncSession, type SyncSession } from '../services/sync/session';
 import {
@@ -270,7 +269,6 @@ export const useDaylistStore = defineStore('daylist', () => {
   const dayLabel = computed(() => `Day: ${dayKey.value} (resets ${pad2(BOUNDARY_HOUR)}:00 local)`);
   const snapshotActive = computed(() => !!snapshotMirror.value);
   const syncReady = computed(() => providerConnected.value && peerCount.value > 0 && pendingTaskIds.value.length === 0 && initialized.value);
-  const throttledFetch = createRateLimitedFetch(fetch, 300);
 
   const ensureTask = (id: string) => {
     const ytask = ydocHandles.value?.yTasks.get(id);
@@ -741,7 +739,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       signaling: sig,
       turnKey,
       turnEnabled,
-      fetchFn: throttledFetch,
+      fetchFn: fetch,
       storage: localStorage,
       platform: { isIPhone },
       debugSignaling: !!logger.value?.enabled,
