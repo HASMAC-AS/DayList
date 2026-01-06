@@ -409,10 +409,11 @@ export async function connectProvider(opts: {
     peerLastSeenAt.set(peerId, now);
     peerSeenOnConn.set(peerId, conn.url);
     opts.onPeerSeen?.({ peerId, reason, at: now, detail });
+    if (reason === 'signal:signal') return;
     const room = getRoom();
     const existingConn = room?.webrtcConns?.get(peerId);
     const healthy = existingConn ? peerIsHealthy(peerId, existingConn, now) : false;
-    const skipPolicy = reason === 'signal:signal' || reason === 'signal:welcome' || reason === 'signal:subscribe';
+    const skipPolicy = reason === 'signal:welcome' || reason === 'signal:subscribe';
 
     if (skipPolicy) {
       if (!healthy && shouldAttemptConnect(peerId, now)) {
@@ -631,11 +632,15 @@ export async function connectProvider(opts: {
 
       if (msg.type === 'publish' && hasTopic) {
         if (msg.data && typeof msg.data === 'object') {
-          const data = msg.data as { from?: unknown; type?: unknown; signal?: unknown };
+          const data = msg.data as { from?: unknown; type?: unknown; signal?: unknown; to?: unknown };
           const peerId = typeof data.from === 'string' ? data.from : '';
-          if (peerId) {
+          const to = typeof data.to === 'string' ? data.to : undefined;
+          const localPeerId = getLocalPeerId();
+          const addressedToLocal = !to || !localPeerId || to === localPeerId;
+          if (peerId && addressedToLocal) {
             recordPeerSeen(peerId, conn, `signal:${typeof data.type === 'string' ? data.type : 'from'}`, {
               type: data.type,
+              to,
               signalType:
                 data && typeof data.signal === 'object' && data.signal && 'type' in (data.signal as { type?: unknown })
                   ? (data.signal as { type?: unknown }).type
@@ -646,11 +651,15 @@ export async function connectProvider(opts: {
           decryptSignalPayload(msg.data)
             .then((decrypted) => {
               if (!decrypted || typeof decrypted !== 'object') return;
-              const data = decrypted as { from?: unknown; type?: unknown; signal?: unknown };
+              const data = decrypted as { from?: unknown; type?: unknown; signal?: unknown; to?: unknown };
               const peerId = typeof data.from === 'string' ? data.from : '';
-              if (!peerId) return;
+              const to = typeof data.to === 'string' ? data.to : undefined;
+              const localPeerId = getLocalPeerId();
+              const addressedToLocal = !to || !localPeerId || to === localPeerId;
+              if (!peerId || !addressedToLocal) return;
               recordPeerSeen(peerId, conn, `signal:${typeof data.type === 'string' ? data.type : 'from'}`, {
                 type: data.type,
+                to,
                 signalType:
                   data && typeof data.signal === 'object' && data.signal && 'type' in (data.signal as { type?: unknown })
                     ? (data.signal as { type?: unknown }).type
