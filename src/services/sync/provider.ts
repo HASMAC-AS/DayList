@@ -6,6 +6,7 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { errToObj } from '../../lib/core';
 import type { YDocHandles } from './ydoc';
+import { ensureWebrtcCompression } from './webrtcCompression';
 
 export interface ProviderStatus {
   connected: boolean;
@@ -52,6 +53,7 @@ export async function connectProvider(opts: {
   onLog?: (event: string, data?: unknown, level?: LogLevel) => void;
   debugSignaling?: boolean;
 }): Promise<WebrtcProvider> {
+  ensureWebrtcCompression({ onLog: opts.onLog });
   const PEER_STALE_MS = 20_000;
   const STALE_CHECK_INTERVAL_MS = 5_000;
   const RESYNC_RETRY_MS = 500;
