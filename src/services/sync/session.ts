@@ -162,6 +162,42 @@ export async function createSyncSession(opts: {
     upgradeStartAt = 0;
   };
 
+  const handleRefresh = (
+    refresh?: Promise<{ iceServers: RTCIceServer[]; source: 'turn-fetch' | 'turn-cache-stale' | 'turn-fetch-failed' }>
+  ) => {
+    if (!refresh) return;
+    refresh
+      .then((result) => {
+        const turnServers = hasTurn(result.iceServers) ? result.iceServers : null;
+        if (!turnServers) {
+          opts.onLog?.('ice:refresh_no_turn', { source: result.source });
+          return;
+        }
+        const refreshed = computeIceConfigs({
+          platform: opts.platform,
+          stun: stunFallback,
+          turn: turnServers
+        });
+        const target = refreshed.upgrade || refreshed.initial;
+        bestConfig = target;
+        if (iceConfigEqual(currentConfig, target)) {
+          opts.onLog?.('ice:upgrade_skip_same', { target: target.mode });
+          pendingUpgrade = null;
+          return;
+        }
+        if (webrtcPeers.length > 0) {
+          opts.onLog?.('ice:upgrade_skip_peers', { peers: webrtcPeers.length });
+          pendingUpgrade = { target, reason: result.source };
+          return;
+        }
+        pendingUpgrade = { target, reason: result.source };
+        scheduleUpgrade(target, result.source);
+      })
+      .catch((error) => {
+        opts.onLog?.('ice:refresh_failed', { error: errToObj(error) }, 'WARN');
+      });
+  };
+
   const start = async (reason = 'start') => {
     if (disposed) return;
     const fast = getIceServersFast({
@@ -182,45 +218,36 @@ export async function createSyncSession(opts: {
 
     await buildProvider(initialConfigs.initial, `${reason}:${fast.initialSource}`);
 
-    if (fast.refresh) {
-      fast.refresh
-        .then((refresh) => {
-          const turnServers = hasTurn(refresh.iceServers) ? refresh.iceServers : null;
-          if (!turnServers) {
-            opts.onLog?.('ice:refresh_no_turn', { source: refresh.source });
-            return;
-          }
-          const refreshed = computeIceConfigs({
-            platform: opts.platform,
-            stun: stunFallback,
-            turn: turnServers
-          });
-          const target = refreshed.upgrade || refreshed.initial;
-          bestConfig = target;
-          if (iceConfigEqual(currentConfig, target)) {
-            opts.onLog?.('ice:upgrade_skip_same', { target: target.mode });
-            pendingUpgrade = null;
-            return;
-          }
-          if (webrtcPeers.length > 0) {
-            opts.onLog?.('ice:upgrade_skip_peers', { peers: webrtcPeers.length });
-            pendingUpgrade = { target, reason: refresh.source };
-            return;
-          }
-          pendingUpgrade = { target, reason: refresh.source };
-          scheduleUpgrade(target, refresh.source);
-        })
-        .catch((error) => {
-          opts.onLog?.('ice:refresh_failed', { error: errToObj(error) }, 'WARN');
-        });
-    }
+    handleRefresh(fast.refresh);
   };
 
   const restart = async (reason: string) => {
     if (disposed) return;
     clearUpgradeTimer();
     upgradeStartAt = 0;
-    await buildProvider(bestConfig || currentConfig, reason);
+    pendingUpgrade = null;
+    const fast = getIceServersFast({
+      turnKey: opts.turnKey,
+      allowTurn: opts.turnEnabled,
+      fetchFn: opts.fetchFn,
+      storage: opts.storage,
+      now,
+      log: opts.onLog
+    });
+    const turnInitial = hasTurn(fast.initial) ? fast.initial : null;
+    const initialConfigs = computeIceConfigs({
+      platform: opts.platform,
+      stun: stunFallback,
+      turn: turnInitial
+    });
+    let restartConfig = bestConfig || currentConfig;
+    if (bestConfig.transport === 'relay') {
+      restartConfig = bestConfig;
+    } else if (!hasTurn(restartConfig.iceServers) && hasTurn(initialConfigs.initial.iceServers)) {
+      restartConfig = initialConfigs.initial;
+    }
+    await buildProvider(restartConfig, `${reason}:${fast.initialSource}`);
+    handleRefresh(fast.refresh);
   };
 
   const forceRelay = async (reason: string) => {
