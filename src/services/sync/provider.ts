@@ -56,6 +56,8 @@ export async function connectProvider(opts: {
   ensureWebrtcCompression({ onLog: opts.onLog });
   const PEER_STALE_MS = 20_000;
   const STALE_CHECK_INTERVAL_MS = 5_000;
+  const DISCONNECTED_GRACE_MS = 15_000;
+  const NEGOTIATION_TIMEOUT_MS = 20_000;
   const RESYNC_RETRY_MS = 500;
   const RESYNC_MAX_ATTEMPTS = 12;
   const RESYNC_MIN_INTERVAL_MS = 30_000;
@@ -65,6 +67,10 @@ export async function connectProvider(opts: {
 
   const peerLastSeenAt = new Map<string, number>();
   const peerSeenOnConn = new Map<string, string>();
+  const peerLastActivityAt = new Map<string, number>();
+  const peerDisconnectedAt = new Map<string, number>();
+  const peerNegotiationStartedAt = new Map<string, number>();
+  const peerLastIceState = new Map<string, string>();
   const pendingPeers = new Set<string>();
   const resyncPending = new Map<string, { reason: string; attempts: number }>();
   const lastResyncAt = new Map<string, number>();
@@ -118,6 +124,134 @@ export async function connectProvider(opts: {
   const getAnyConn = () => {
     const conns = provider.signalingConns || [];
     return conns.find((conn) => conn.connected || conn.connecting) || conns[0] || null;
+  };
+
+  const isCurrentConn = (peerId: string, conn: unknown) => {
+    const room = getRoom();
+    if (!room || !room.webrtcConns) return true;
+    return room.webrtcConns.get(peerId) === conn;
+  };
+
+  const markPeerActivity = (peerId: string, at = Date.now()) => {
+    peerLastActivityAt.set(peerId, at);
+  };
+
+  const markPeerDisconnected = (peerId: string, at = Date.now()) => {
+    if (!peerDisconnectedAt.has(peerId)) peerDisconnectedAt.set(peerId, at);
+  };
+
+  const ensureNegotiationStart = (peerId: string, at = Date.now()) => {
+    if (!peerNegotiationStartedAt.has(peerId)) peerNegotiationStartedAt.set(peerId, at);
+  };
+
+  const cleanupPeerTracking = (peerId: string) => {
+    peerLastActivityAt.delete(peerId);
+    peerDisconnectedAt.delete(peerId);
+    peerNegotiationStartedAt.delete(peerId);
+    peerLastIceState.delete(peerId);
+  };
+
+  const peerIsHealthy = (peerId: string, conn: { peer?: any; closed?: boolean }, now = Date.now()) => {
+    if (!conn || !conn.peer) return false;
+    if (conn.closed) return false;
+    const peer = conn.peer;
+    if (peer.destroyed || peer.destroying) return false;
+
+    ensureNegotiationStart(peerId, now);
+    const startedAt = peerNegotiationStartedAt.get(peerId) || now;
+    const pc = peer?._pc;
+    const iceState =
+      typeof pc?.iceConnectionState === 'string' ? pc.iceConnectionState : peerLastIceState.get(peerId) || null;
+    const connState = typeof pc?.connectionState === 'string' ? pc.connectionState : null;
+    const channelState = peer?._channel?.readyState;
+    const connected = !!peer.connected || channelState === 'open';
+
+    if (iceState === 'disconnected') {
+      markPeerDisconnected(peerId, now);
+    } else if (iceState) {
+      peerDisconnectedAt.delete(peerId);
+    }
+
+    if (iceState === 'failed' || iceState === 'closed') return false;
+    if (connState === 'failed' || connState === 'closed') return false;
+
+    if (!connected) {
+      if (channelState === 'closed' || channelState === 'closing') return false;
+      if (now - startedAt > NEGOTIATION_TIMEOUT_MS) return false;
+      if (iceState === 'disconnected') {
+        const disconnectedAt = peerDisconnectedAt.get(peerId) || startedAt;
+        const lastActivity = peerLastActivityAt.get(peerId) || startedAt;
+        const baseline = Math.max(disconnectedAt, lastActivity, startedAt);
+        if (now - baseline > DISCONNECTED_GRACE_MS) return false;
+      }
+      return true;
+    }
+
+    if (channelState && channelState !== 'open') return false;
+    if (iceState === 'disconnected') {
+      const disconnectedAt = peerDisconnectedAt.get(peerId) || startedAt;
+      const lastActivity = peerLastActivityAt.get(peerId) || startedAt;
+      const baseline = Math.max(disconnectedAt, lastActivity, startedAt);
+      if (now - baseline > DISCONNECTED_GRACE_MS) return false;
+    }
+    return true;
+  };
+
+  const hookPeer = (peerId: string, conn: { peer?: any }) => {
+    if (!peerId || hookedPeers.has(peerId)) return;
+    if (!conn || !(conn as { peer?: any }).peer) return;
+    const peer = (conn as { peer: any }).peer;
+    hookedPeers.add(peerId);
+    ensureNegotiationStart(peerId);
+    try {
+      peer.on('connect', () => {
+        if (!isCurrentConn(peerId, conn)) return;
+        connectedPeers.add(peerId);
+        markPeerActivity(peerId);
+        peerDisconnectedAt.delete(peerId);
+        opts.onLog?.('webrtc:peer_connected', { peerId });
+        emitPeerState({ peerId, event: 'peer_connected', connected: true });
+        requestResync(peerId, 'peer_connect');
+      });
+      peer.on('close', () => {
+        if (!isCurrentConn(peerId, conn)) return;
+        connectedPeers.delete(peerId);
+        hookedPeers.delete(peerId);
+        cleanupPeerTracking(peerId);
+        opts.onLog?.('webrtc:peer_closed', { peerId });
+        emitPeerState({ peerId, event: 'peer_closed', connected: false });
+      });
+      peer.on('error', (error: unknown) => {
+        if (!isCurrentConn(peerId, conn)) return;
+        opts.onLog?.('webrtc:peer_error', { peerId, error: errToObj(error) }, 'WARN');
+        emitPeerState({ peerId, event: 'peer_error', error });
+      });
+      peer.on('data', () => {
+        if (!isCurrentConn(peerId, conn)) return;
+        markPeerActivity(peerId);
+      });
+      if (typeof peer.on === 'function') {
+        peer.on('iceStateChange', (state: unknown) => {
+          if (!isCurrentConn(peerId, conn)) return;
+          const nextState = typeof state === 'string' ? state : String(state);
+          peerLastIceState.set(peerId, nextState);
+          if (nextState === 'disconnected') {
+            markPeerDisconnected(peerId);
+          } else {
+            peerDisconnectedAt.delete(peerId);
+          }
+          opts.onLog?.('webrtc:ice_state', { peerId, state });
+          emitPeerState({ peerId, event: 'ice_state', iceState: state });
+        });
+        peer.on('signalingStateChange', (state: unknown) => {
+          if (!isCurrentConn(peerId, conn)) return;
+          opts.onLog?.('webrtc:signal_state', { peerId, state });
+          emitPeerState({ peerId, event: 'signal_state', signalState: state });
+        });
+      }
+    } catch (error) {
+      opts.onLog?.('webrtc:peer_hook_failed', { peerId, error: errToObj(error) }, 'WARN');
+    }
   };
 
   const decodeBase64 = (input: string) => {
@@ -209,17 +343,39 @@ export async function connectProvider(opts: {
       logConnectAttempt(peerId, reason, detail, 'skip_self');
       return;
     }
-    if (room.webrtcConns?.has(peerId)) {
-      logConnectAttempt(peerId, reason, detail, 'skip_existing');
-      return;
+    const existingConn = room.webrtcConns?.get(peerId);
+    if (existingConn) {
+      if (peerIsHealthy(peerId, existingConn)) {
+        logConnectAttempt(peerId, reason, detail, 'skip_healthy');
+        hookPeer(peerId, existingConn);
+        return;
+      }
+      logConnectAttempt(peerId, reason, detail, 'replace_unhealthy');
+      try {
+        if (typeof (existingConn as { destroy?: () => void }).destroy === 'function') {
+          (existingConn as { destroy: () => void }).destroy();
+        } else if ((existingConn as { peer?: { destroy?: () => void } }).peer?.destroy) {
+          (existingConn as { peer: { destroy: () => void } }).peer.destroy();
+        }
+      } catch (error) {
+        opts.onLog?.('webrtc:peer_destroy_failed', { peerId, reason, error: errToObj(error) }, 'WARN');
+      }
+      connectedPeers.delete(peerId);
+      hookedPeers.delete(peerId);
+      cleanupPeerTracking(peerId);
+      if (room.webrtcConns?.has(peerId)) {
+        room.webrtcConns.delete(peerId);
+      }
     }
 
     try {
       logConnectAttempt(peerId, reason, detail, 'create');
+      ensureNegotiationStart(peerId);
       const webrtcConn = new WebrtcConn(conn, true, peerId, room);
       room.webrtcConns.set(peerId, webrtcConn);
       opts.onLog?.('webrtc:manual_connect', { peerId, reason, detail });
       emitPeerState({ peerId, event: 'connect_created', reason, detail, connected: false });
+      hookPeer(peerId, webrtcConn);
     } catch (error) {
       opts.onLog?.('webrtc:manual_connect_failed', { peerId, reason, error: errToObj(error) }, 'WARN');
       logConnectAttempt(peerId, reason, detail, 'failed', error, 'WARN');
@@ -393,41 +549,9 @@ export async function connectProvider(opts: {
     if (room && room.webrtcConns) {
       webrtcList.forEach((peerId) => {
         if (!peerId || typeof peerId !== 'string') return;
-        if (hookedPeers.has(peerId)) return;
         const conn = room.webrtcConns.get(peerId);
-        if (!conn || !(conn as { peer?: any }).peer) return;
-        const peer = (conn as { peer: any }).peer;
-        hookedPeers.add(peerId);
-        try {
-          peer.on('connect', () => {
-            connectedPeers.add(peerId);
-            opts.onLog?.('webrtc:peer_connected', { peerId });
-            emitPeerState({ peerId, event: 'peer_connected', connected: true });
-            requestResync(peerId, 'peer_connect');
-          });
-          peer.on('close', () => {
-            connectedPeers.delete(peerId);
-            hookedPeers.delete(peerId);
-            opts.onLog?.('webrtc:peer_closed', { peerId });
-            emitPeerState({ peerId, event: 'peer_closed', connected: false });
-          });
-          peer.on('error', (error: unknown) => {
-            opts.onLog?.('webrtc:peer_error', { peerId, error: errToObj(error) }, 'WARN');
-            emitPeerState({ peerId, event: 'peer_error', error });
-          });
-          if (typeof peer.on === 'function') {
-            peer.on('iceStateChange', (state: unknown) => {
-              opts.onLog?.('webrtc:ice_state', { peerId, state });
-              emitPeerState({ peerId, event: 'ice_state', iceState: state });
-            });
-            peer.on('signalingStateChange', (state: unknown) => {
-              opts.onLog?.('webrtc:signal_state', { peerId, state });
-              emitPeerState({ peerId, event: 'signal_state', signalState: state });
-            });
-          }
-        } catch (error) {
-          opts.onLog?.('webrtc:peer_hook_failed', { peerId, error: errToObj(error) }, 'WARN');
-        }
+        if (!conn) return;
+        hookPeer(peerId, conn);
       });
     }
   });
