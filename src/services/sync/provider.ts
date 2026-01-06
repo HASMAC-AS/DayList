@@ -59,6 +59,7 @@ export async function connectProvider(opts: {
   const RESYNC_RETRY_MS = 500;
   const RESYNC_MAX_ATTEMPTS = 12;
   const RESYNC_MIN_INTERVAL_MS = 30_000;
+  const CONNECT_ATTEMPT_COOLDOWN_MS = 2_000;
   const MESSAGE_SYNC = 0;
   const MESSAGE_AWARENESS = 1;
   const MESSAGE_QUERY_AWARENESS = 3;
@@ -69,6 +70,7 @@ export async function connectProvider(opts: {
   const peerDisconnectedAt = new Map<string, number>();
   const peerNegotiationStartedAt = new Map<string, number>();
   const peerLastIceState = new Map<string, string>();
+  const peerLastConnectAttemptAt = new Map<string, number>();
   const pendingPeers = new Set<string>();
   const resyncPending = new Map<string, { reason: string; attempts: number }>();
   const lastResyncAt = new Map<string, number>();
@@ -147,6 +149,7 @@ export async function connectProvider(opts: {
     peerDisconnectedAt.delete(peerId);
     peerNegotiationStartedAt.delete(peerId);
     peerLastIceState.delete(peerId);
+    peerLastConnectAttemptAt.delete(peerId);
   };
 
   const peerIsHealthy = (peerId: string, conn: { peer?: any; closed?: boolean }, now = Date.now()) => {
@@ -238,8 +241,16 @@ export async function connectProvider(opts: {
           } else {
             peerDisconnectedAt.delete(peerId);
           }
+          if (nextState === 'failed' || nextState === 'closed') {
+            connectedPeers.delete(peerId);
+          }
           opts.onLog?.('webrtc:ice_state', { peerId, state });
-          emitPeerState({ peerId, event: 'ice_state', iceState: state });
+          emitPeerState({
+            peerId,
+            event: 'ice_state',
+            iceState: state,
+            connected: nextState === 'failed' || nextState === 'closed' ? false : undefined
+          });
         });
         peer.on('signalingStateChange', (state: unknown) => {
           if (!isCurrentConn(peerId, conn)) return;
@@ -381,6 +392,13 @@ export async function connectProvider(opts: {
     }
   };
 
+  const shouldAttemptConnect = (peerId: string, now = Date.now()) => {
+    const last = peerLastConnectAttemptAt.get(peerId) || 0;
+    if (now - last < CONNECT_ATTEMPT_COOLDOWN_MS) return false;
+    peerLastConnectAttemptAt.set(peerId, now);
+    return true;
+  };
+
   const recordPeerSeen = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
     const localPeerId = getLocalPeerId();
     if (!peerId || peerId === localPeerId) return;
@@ -391,12 +409,23 @@ export async function connectProvider(opts: {
     peerLastSeenAt.set(peerId, now);
     peerSeenOnConn.set(peerId, conn.url);
     opts.onPeerSeen?.({ peerId, reason, at: now, detail });
-    if (isNew || isStale) {
-      const shouldConnect = reason !== 'signal:signal' && reason !== 'signal:welcome' && reason !== 'signal:subscribe';
-      if (!shouldConnect) {
-        logConnectAttempt(peerId, isNew ? 'new_peer' : 'stale_peer', detail, 'skip_policy');
+    const room = getRoom();
+    const existingConn = room?.webrtcConns?.get(peerId);
+    const healthy = existingConn ? peerIsHealthy(peerId, existingConn, now) : false;
+    const skipPolicy = reason === 'signal:signal' || reason === 'signal:welcome' || reason === 'signal:subscribe';
+
+    if (skipPolicy) {
+      if (!healthy && shouldAttemptConnect(peerId, now)) {
+        ensureWebrtcConn(peerId, conn, 'signal_unhealthy', { ...detail, signalReason: reason });
         return;
       }
+      if (isNew || isStale) {
+        logConnectAttempt(peerId, isNew ? 'new_peer' : 'stale_peer', detail, 'skip_policy');
+      }
+      return;
+    }
+
+    if (isNew || isStale) {
       ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
     }
   };
@@ -454,7 +483,7 @@ export async function connectProvider(opts: {
       return true;
     } catch (error) {
       opts.onLog?.('webrtc:resync_failed', { peerId, reason, error: errToObj(error) }, 'WARN');
-      return true;
+      return false;
     }
   };
 

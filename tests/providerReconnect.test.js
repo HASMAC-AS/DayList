@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('y-webrtc', () => {
   class Emitter {
@@ -86,7 +86,7 @@ vi.mock('y-webrtc', () => {
   return { WebrtcProvider, SignalingConn, WebrtcConn, __created: created };
 });
 
-const buildProvider = async () => {
+const buildProvider = async (overrides = {}) => {
   const { connectProvider } = await import('../src/services/sync/provider');
   return connectProvider({
     doc: { ydoc: {} },
@@ -94,11 +94,22 @@ const buildProvider = async () => {
     enc: 'enc',
     signaling: ['wss://signal.example'],
     iceServers: [],
-    onAwarenessChange: () => {}
+    onAwarenessChange: () => {},
+    ...overrides
   });
 };
 
 describe('webrtc reconnection', () => {
+  beforeEach(async () => {
+    const { __created } = await import('y-webrtc');
+    __created.length = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it('replaces unhealthy peer on announce', async () => {
     const provider = await buildProvider();
     const { __created } = await import('y-webrtc');
@@ -130,5 +141,66 @@ describe('webrtc reconnection', () => {
     expect(existing.destroy).toHaveBeenCalledTimes(1);
     expect(provider.room.webrtcConns.get('peer-a')).not.toBe(existing);
     expect(__created.length).toBe(1);
+  });
+
+  it('connects on signal when peer has no healthy connection', async () => {
+    const provider = await buildProvider();
+    const { __created } = await import('y-webrtc');
+    const conn = provider.signalingConns[0];
+
+    conn.emit('message', [
+      {
+        type: 'publish',
+        topic: 'room',
+        data: { from: 'peer-a', type: 'signal', signal: { type: 'offer' } }
+      }
+    ]);
+
+    expect(provider.room.webrtcConns.has('peer-a')).toBe(true);
+    expect(__created.length).toBe(1);
+  });
+
+  it('marks peers disconnected on ICE failure', async () => {
+    const onPeerState = vi.fn();
+    const provider = await buildProvider({ onPeerState });
+    const { __created } = await import('y-webrtc');
+    const conn = provider.signalingConns[0];
+
+    conn.emit('message', [
+      {
+        type: 'publish',
+        topic: 'room',
+        data: { from: 'peer-a', type: 'announce' }
+      }
+    ]);
+
+    const webrtcConn = __created[0];
+    webrtcConn.peer.emit('iceStateChange', ['failed']);
+
+    const iceCall = onPeerState.mock.calls.find((call) => call[0]?.event === 'ice_state');
+    expect(iceCall?.[0]?.connected).toBe(false);
+  });
+
+  it('retries resync when initial resync fails', async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+    const provider = await buildProvider();
+    const { __created } = await import('y-webrtc');
+    const conn = provider.signalingConns[0];
+
+    conn.emit('message', [
+      {
+        type: 'publish',
+        topic: 'room',
+        data: { from: 'peer-a', type: 'announce' }
+      }
+    ]);
+
+    const webrtcConn = __created[0];
+    webrtcConn.peer.connected = true;
+    webrtcConn.peer.emit('connect');
+
+    const hasResyncTimeout = setTimeoutSpy.mock.calls.some((call) => call[1] === 500);
+    expect(hasResyncTimeout).toBe(true);
   });
 });
