@@ -186,6 +186,18 @@ export const useDaylistStore = defineStore('daylist', () => {
     logger.value?.log(event, data, level);
   };
 
+  const logLifecycleEvent = (event: string, data: Record<string, unknown> = {}) => {
+    logEvent(`lifecycle:${event}`, data);
+  };
+
+  const logLifecycleAction = (source: string, action: string, data: Record<string, unknown> = {}) => {
+    logEvent('lifecycle:action', {
+      source,
+      action,
+      ...data
+    });
+  };
+
   const updatePeerState = (info: PeerConnectionUpdate) => {
     if (!info.peerId) return;
     if (!peerStates[info.peerId]) {
@@ -1288,35 +1300,57 @@ export const useDaylistStore = defineStore('daylist', () => {
     });
 
     document.addEventListener('visibilitychange', () => {
+      const at = Date.now();
+      logLifecycleEvent('visibilitychange', { at, hidden: document.hidden });
       if (document.hidden) {
-        lastHiddenAt = Date.now();
-        logEvent('lifecycle:hidden', { at: lastHiddenAt });
+        lastHiddenAt = at;
         // When iOS suspends the app it may not deliver clean disconnect events.
         // Mark signaling timestamps stale so our resume logic doesn't trust cached state.
         signalingLastMessageAt.value = 0;
         signalingPeerSeenAt.value = 0;
+        logLifecycleAction('visibilitychange', 'mark_signaling_stale', { at });
         return;
       }
+      logLifecycleAction('visibilitychange', 'resume_sync', { reason: 'visibility' });
       resumeSync('visibility');
     });
 
     // Some iOS transitions fire pagehide/pageshow instead of (or in addition to) visibility.
     window.addEventListener('pagehide', (event) => {
-      lastHiddenAt = Date.now();
-      logEvent('lifecycle:pagehide', { at: lastHiddenAt, persisted: (event as PageTransitionEvent).persisted });
+      const at = Date.now();
+      lastHiddenAt = at;
+      logLifecycleEvent('pagehide', { at, persisted: (event as PageTransitionEvent).persisted });
     });
-    window.addEventListener('focus', () => resumeSync('focus'));
+    window.addEventListener('pageshow', (event) => {
+      const at = Date.now();
+      const persisted = (event as PageTransitionEvent).persisted;
+      logLifecycleEvent('pageshow', { at, persisted });
+      if (persisted) {
+        logLifecycleAction('pageshow', 'resume_sync', { reason: 'pageshow:bfcache', persisted });
+        resumeSync('pageshow:bfcache');
+      }
+    });
+    window.addEventListener('focus', () => {
+      const at = Date.now();
+      logLifecycleEvent('focus', { at });
+      logLifecycleAction('focus', 'resume_sync', { reason: 'focus' });
+      resumeSync('focus');
+    });
+    window.addEventListener('blur', () => {
+      logLifecycleEvent('blur', { at: Date.now() });
+    });
     window.addEventListener('online', () => {
       logEvent('network:online');
+      logLifecycleEvent('online', { at: Date.now() });
+      logLifecycleAction('online', 'resume_sync', { reason: 'network:online' });
       resumeSync('network:online');
     });
     window.addEventListener('offline', () => {
       lastOfflineAt = Date.now();
       logEvent('network:offline', { at: lastOfflineAt });
+      logLifecycleEvent('offline', { at: lastOfflineAt });
       signalingLastMessageAt.value = 0;
-    });
-    window.addEventListener('pageshow', (event) => {
-      if ((event as PageTransitionEvent).persisted) resumeSync('pageshow:bfcache');
+      logLifecycleAction('offline', 'mark_signaling_stale', { at: lastOfflineAt });
     });
 
     if (watchdogTimer != null) window.clearInterval(watchdogTimer);
