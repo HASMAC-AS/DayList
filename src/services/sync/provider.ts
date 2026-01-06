@@ -34,8 +34,6 @@ export type PeerConnectionUpdate = {
   error?: unknown;
 };
 
-type Outgoing = { conn: SignalingConn; message: unknown; enqueuedAt: number; key: string };
-
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
 export async function connectProvider(opts: {
@@ -54,12 +52,7 @@ export async function connectProvider(opts: {
   onLog?: (event: string, data?: unknown, level?: LogLevel) => void;
   debugSignaling?: boolean;
 }): Promise<WebrtcProvider> {
-  const DISCOVERY_INTERVAL_MS = 250;
-  const STEADY_INTERVAL_MS = 45_000;
-  const LOW_BURST_COUNT = 3;
   const PEER_STALE_MS = 20_000;
-  const PEER_IDLE_RESET_MS = 15_000;
-  const PEER_RECOVERY_WINDOW_MS = 20_000;
   const STALE_CHECK_INTERVAL_MS = 5_000;
   const RESYNC_RETRY_MS = 500;
   const RESYNC_MAX_ATTEMPTS = 12;
@@ -68,12 +61,6 @@ export async function connectProvider(opts: {
   const MESSAGE_AWARENESS = 1;
   const MESSAGE_QUERY_AWARENESS = 3;
 
-  const lowQueue = new Map<string, Outgoing>();
-  let lowTimer: ReturnType<typeof setTimeout> | null = null;
-  let lowBurstTokens = 0;
-  let mode: 'discovery' | 'steady' = 'discovery';
-  let peerIdleTimer: ReturnType<typeof setTimeout> | null = null;
-  let peerRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   const peerLastSeenAt = new Map<string, number>();
   const peerSeenOnConn = new Map<string, string>();
   const pendingPeers = new Set<string>();
@@ -106,130 +93,6 @@ export async function connectProvider(opts: {
       outcome,
       connected: outcome === 'connected' ? true : outcome.startsWith('skip_') ? undefined : false
     });
-  };
-
-  const currentInterval = () => (mode === 'discovery' ? DISCOVERY_INTERVAL_MS : STEADY_INTERVAL_MS);
-
-  const resetLowTimer = () => {
-    if (lowTimer != null) {
-      clearTimeout(lowTimer);
-      lowTimer = null;
-    }
-    if (lowQueue.size > 0) scheduleLowPump(0);
-  };
-
-  const scheduleLowPump = (delayMs?: number) => {
-    if (lowTimer != null) return;
-    lowTimer = setTimeout(pumpLow, delayMs ?? currentInterval());
-  };
-
-  const pumpLow = () => {
-    lowTimer = null;
-    if (lowQueue.size === 0) return;
-    const entry = lowQueue.entries().next().value as [string, Outgoing] | undefined;
-    if (!entry) return;
-    const [key, outgoing] = entry;
-    lowQueue.delete(key);
-    sendNow(outgoing.conn, outgoing.message);
-    if (lowQueue.size > 0) scheduleLowPump();
-  };
-
-  const setMode = (next: 'discovery' | 'steady', reason: string) => {
-    if (mode === next) return;
-    mode = next;
-    opts.onLog?.('signal:throttle_mode', { phase: mode, intervalMs: currentInterval(), reason });
-    resetLowTimer();
-  };
-
-  const clearPeerIdleTimer = () => {
-    if (peerIdleTimer != null) {
-      clearTimeout(peerIdleTimer);
-      peerIdleTimer = null;
-    }
-  };
-
-  const clearPeerRecoveryTimer = () => {
-    if (peerRecoveryTimer != null) {
-      clearTimeout(peerRecoveryTimer);
-      peerRecoveryTimer = null;
-    }
-  };
-
-  const schedulePeerIdleReset = (reason: string) => {
-    if (peerIdleTimer != null) return;
-    peerIdleTimer = setTimeout(() => {
-      peerIdleTimer = null;
-      setMode('discovery', `peer_idle:${reason}`);
-    }, PEER_IDLE_RESET_MS);
-    opts.onLog?.('signal:peer_idle_scheduled', { reason, afterMs: PEER_IDLE_RESET_MS });
-  };
-
-  const schedulePeerRecovery = (reason: string, webrtcTotal: number) => {
-    clearPeerRecoveryTimer();
-    peerRecoveryTimer = setTimeout(() => {
-      peerRecoveryTimer = null;
-      if (webrtcTotal > 0 && connectedPeers.size > 0) {
-        setMode('steady', `peer_recovery_done:${reason}`);
-      }
-    }, PEER_RECOVERY_WINDOW_MS);
-    opts.onLog?.('signal:peer_recovery', { reason, windowMs: PEER_RECOVERY_WINDOW_MS, webrtcTotal });
-  };
-
-  const updateModeForPeers = (webrtcTotal: number, reason: string) => {
-    if (webrtcTotal <= 0) return;
-    if (connectedPeers.size === 0) {
-      setMode('discovery', `webrtc_waiting:${reason}`);
-      return;
-    }
-    if (connectedPeers.size < webrtcTotal) {
-      setMode('discovery', `webrtc_partial:${reason}`);
-      grantLowBurst('webrtc_partial', 6);
-      schedulePeerRecovery(`webrtc_partial:${reason}`, webrtcTotal);
-      return;
-    }
-    clearPeerRecoveryTimer();
-    setMode('steady', `webrtc_connected:${reason}`);
-  };
-
-  const flushLowBurst = () => {
-    while (lowBurstTokens > 0 && lowQueue.size > 0) {
-      const entry = lowQueue.entries().next().value as [string, Outgoing] | undefined;
-      if (!entry) return;
-      const [key, outgoing] = entry;
-      lowQueue.delete(key);
-      lowBurstTokens -= 1;
-      sendNow(outgoing.conn, outgoing.message);
-    }
-  };
-
-  const grantLowBurst = (reason: string, count = LOW_BURST_COUNT) => {
-    lowBurstTokens = Math.max(lowBurstTokens, count);
-    opts.onLog?.('signal:low_burst', { reason, remaining: lowBurstTokens, mode });
-    flushLowBurst();
-  };
-
-  const classifyOutgoing = (message: unknown): 'immediate' | 'low' => {
-    if (!message || typeof message !== 'object') return 'immediate';
-    const msg = message as { type?: string; topic?: string; data?: unknown };
-    if (msg.type !== 'publish') return 'immediate';
-    if (msg.topic && msg.topic !== opts.room) return 'immediate';
-    const data = msg.data;
-    if (typeof data === 'string') {
-      // Encrypted payloads may contain direct signals; don't throttle them.
-      return 'immediate';
-    }
-    if (data && typeof data === 'object') {
-      const payload = data as { to?: unknown; type?: unknown };
-      if (payload.to) return 'immediate';
-      if (payload.type === 'signal') return 'immediate';
-    }
-    return 'low';
-  };
-
-  const lowKey = (conn: SignalingConn, message: unknown) => {
-    const msg = message as { topic?: string } | null;
-    const topic = msg && typeof msg.topic === 'string' && msg.topic ? msg.topic : opts.room;
-    return `${conn.url}|${topic}`;
   };
 
   const provider = new WebrtcProvider(opts.room, opts.doc.ydoc, {
@@ -327,19 +190,8 @@ export async function connectProvider(opts: {
     const send =
       connSend.get(conn) ||
       ((conn as SignalingConn & { __dlSend?: (message: unknown) => void }).__dlSend || null);
-    logSignal('send', conn, message, { intervalMs: currentInterval(), mode });
+    logSignal('send', conn, message);
     if (send) send(message);
-  };
-
-  const queueLow = (conn: SignalingConn, message: unknown) => {
-    if (lowBurstTokens > 0) {
-      lowBurstTokens -= 1;
-      sendNow(conn, message);
-      return;
-    }
-    const key = lowKey(conn, message);
-    lowQueue.set(key, { conn, message, enqueuedAt: Date.now(), key });
-    scheduleLowPump();
   };
 
   const ensureWebrtcConn = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
@@ -384,7 +236,6 @@ export async function connectProvider(opts: {
     peerSeenOnConn.set(peerId, conn.url);
     opts.onPeerSeen?.({ peerId, reason, at: now, detail });
     if (isNew || isStale) {
-      grantLowBurst(isNew ? 'peer_new' : 'peer_stale');
       const shouldConnect = reason !== 'signal:signal' && reason !== 'signal:welcome' && reason !== 'signal:subscribe';
       if (!shouldConnect) {
         logConnectAttempt(peerId, isNew ? 'new_peer' : 'stale_peer', detail, 'skip_policy');
@@ -486,19 +337,8 @@ export async function connectProvider(opts: {
       clearInterval(staleInterval);
       staleInterval = null;
     }
-    clearPeerIdleTimer();
-    clearPeerRecoveryTimer();
-    if (lowTimer != null) {
-      clearTimeout(lowTimer);
-      lowTimer = null;
-    }
     return originalDestroy();
   };
-
-  opts.onLog?.('signal:throttle_mode', {
-    phase: mode,
-    intervalMs: currentInterval()
-  });
 
   staleInterval = setInterval(() => {
     const now = Date.now();
@@ -542,14 +382,9 @@ export async function connectProvider(opts: {
     const webrtcList = Array.isArray(event.webrtcPeers) ? event.webrtcPeers : [];
 
     if (webrtcList.length > 0) {
-      clearPeerIdleTimer();
       connectedPeers.forEach((peerId) => {
         if (!webrtcList.includes(peerId)) connectedPeers.delete(peerId);
       });
-      updateModeForPeers(webrtcList.length, 'peers');
-    } else {
-      clearPeerRecoveryTimer();
-      schedulePeerIdleReset('webrtc_empty');
     }
 
     const room = getRoom();
@@ -567,8 +402,6 @@ export async function connectProvider(opts: {
             opts.onLog?.('webrtc:peer_connected', { peerId });
             emitPeerState({ peerId, event: 'peer_connected', connected: true });
             requestResync(peerId, 'peer_connect');
-            clearPeerIdleTimer();
-            updateModeForPeers(room?.webrtcConns?.size ?? connectedPeers.size, 'peer_connect');
           });
           peer.on('close', () => {
             connectedPeers.delete(peerId);
@@ -616,7 +449,6 @@ export async function connectProvider(opts: {
     conn.on('connect', () => {
       updateStatus();
       opts.onLog?.('signal:connect', { url: conn.url });
-      grantLowBurst('signal_connect');
       flushPendingPeers('signaling_connect');
     });
     conn.on('disconnect', () => {
@@ -687,12 +519,7 @@ export async function connectProvider(opts: {
     connSend.set(conn, originalSend);
     (conn as SignalingConn & { __dlSend?: (message: unknown) => void }).__dlSend = originalSend;
     conn.send = (message: unknown) => {
-      const decision = classifyOutgoing(message);
-      if (decision === 'immediate') {
-        sendNow(conn, message);
-      } else {
-        queueLow(conn, message);
-      }
+      sendNow(conn, message);
     };
   };
 
