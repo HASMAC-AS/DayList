@@ -11,7 +11,7 @@
         <TaskListMain />
       </div>
       <div v-else-if="view === 'settings'" key="settings" class="settings-view">
-        <SettingsView @open-diagnostics="view = 'diagnostics'" />
+        <SettingsView @open-diagnostics="navigateTo('diagnostics')" />
       </div>
       <div v-else key="diagnostics" class="settings-view">
         <DiagnosticsView />
@@ -28,7 +28,7 @@
     class="fab fab-left"
     type="button"
     aria-label="Open settings"
-    @click="view = 'settings'"
+    @click="navigateTo('settings')"
   >
     <Settings2 class="fab-icon" aria-hidden="true" />
   </button>
@@ -91,7 +91,30 @@ const listColor = computed(() => store.activeList?.color || DEFAULT_LIST_COLOR);
 const BASE_ACCENT_LIGHT = '#1f4b99';
 const BASE_ACCENT_DARK = '#6ea8ff';
 
+const ensureHistoryState = (next: 'main' | 'settings' | 'diagnostics', replace = false) => {
+  const state = { ...(history.state || {}), view: next };
+  if (replace) history.replaceState(state, '', window.location.href);
+  else history.pushState(state, '', window.location.href);
+};
+
+const setView = (next: 'main' | 'settings' | 'diagnostics', fromPop = false) => {
+  if (view.value === next) return;
+  view.value = next;
+  if (!fromPop) ensureHistoryState(next);
+};
+
+const navigateTo = (next: 'main' | 'settings' | 'diagnostics') => {
+  setView(next, false);
+};
+
 onMounted(() => {
+  const initial = (history.state && history.state.view) || 'main';
+  view.value = initial;
+  ensureHistoryState(initial, true);
+  window.addEventListener('popstate', (event) => {
+    const next = (event.state && event.state.view) || 'main';
+    setView(next, true);
+  });
   store.initApp();
 });
 
@@ -246,10 +269,11 @@ const closeComposer = () => {
 };
 
 const handleBack = () => {
-  if (view.value === 'diagnostics') {
-    view.value = 'settings';
-  } else {
-    view.value = 'main';
+  if (view.value === 'main') return;
+  if (history.state && history.state.view) {
+    history.back();
+    return;
   }
+  setView(view.value === 'diagnostics' ? 'settings' : 'main');
 };
 </script>
