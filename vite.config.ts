@@ -13,6 +13,8 @@ export default defineConfig({
     __BUILD_TIME__: JSON.stringify(buildTime)
   },
   build: {
+    minify: false,
+    sourcemap: true,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
