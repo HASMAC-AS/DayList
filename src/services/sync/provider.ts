@@ -122,6 +122,11 @@ export async function connectProvider(opts: {
     const room = getRoom();
     return room?.peerId || null;
   };
+  const shouldInitiateWith = (peerId: string) => {
+    const localPeerId = getLocalPeerId();
+    if (!localPeerId) return true;
+    return localPeerId < peerId;
+  };
   const getAnyConn = () => {
     const conns = provider.signalingConns || [];
     return conns.find((conn) => conn.connected || conn.connecting) || conns[0] || null;
@@ -340,7 +345,13 @@ export async function connectProvider(opts: {
     if (send) send(message);
   };
 
-  const ensureWebrtcConn = (peerId: string, conn: SignalingConn, reason: string, detail?: unknown) => {
+  const ensureWebrtcConn = (
+    peerId: string,
+    conn: SignalingConn,
+    reason: string,
+    detail?: unknown,
+    initiator = true
+  ) => {
     if (!peerId) return;
     const room = getRoom();
     if (!room) {
@@ -381,7 +392,7 @@ export async function connectProvider(opts: {
     try {
       logConnectAttempt(peerId, reason, detail, 'create');
       ensureNegotiationStart(peerId);
-      const webrtcConn = new WebrtcConn(conn, true, peerId, room);
+      const webrtcConn = new WebrtcConn(conn, initiator, peerId, room);
       room.webrtcConns.set(peerId, webrtcConn);
       opts.onLog?.('webrtc:manual_connect', { peerId, reason, detail });
       emitPeerState({ peerId, event: 'connect_created', reason, detail, connected: false });
@@ -415,14 +426,16 @@ export async function connectProvider(opts: {
     const healthy = existingConn ? peerIsHealthy(peerId, existingConn, now) : false;
     if (reason === 'signal:signal') {
       if (!healthy && shouldAttemptConnect(peerId, now)) {
-        ensureWebrtcConn(peerId, conn, 'signal_unhealthy', { ...detail, signalReason: reason });
+        const signalDetail = detail as { signalType?: unknown };
+        const isOffer = signalDetail && signalDetail.signalType === 'offer';
+        ensureWebrtcConn(peerId, conn, 'signal_unhealthy', { ...detail, signalReason: reason }, !isOffer);
       }
       return;
     }
     const skipPolicy = reason === 'signal:welcome' || reason === 'signal:subscribe';
 
     if (skipPolicy) {
-      if (!healthy && shouldAttemptConnect(peerId, now)) {
+      if (!healthy && shouldAttemptConnect(peerId, now) && shouldInitiateWith(peerId)) {
         ensureWebrtcConn(peerId, conn, 'signal_unhealthy', { ...detail, signalReason: reason });
         return;
       }
@@ -432,7 +445,7 @@ export async function connectProvider(opts: {
       return;
     }
 
-    if (isNew || isStale) {
+    if ((isNew || isStale) && shouldInitiateWith(peerId)) {
       ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
     }
   };
@@ -539,7 +552,9 @@ export async function connectProvider(opts: {
     peerLastSeenAt.forEach((lastSeen, peerId) => {
       if (now - lastSeen > PEER_STALE_MS) {
         peerLastSeenAt.set(peerId, now);
-        ensureWebrtcConn(peerId, conn, 'stale_check');
+        if (shouldInitiateWith(peerId)) {
+          ensureWebrtcConn(peerId, conn, 'stale_check');
+        }
       }
     });
   }, STALE_CHECK_INTERVAL_MS);

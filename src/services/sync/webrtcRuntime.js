@@ -209,6 +209,11 @@ const broadcastRoomMessage = (room, m) => {
   broadcastWebrtcConn(room, m);
 };
 
+const shouldInitiate = (localPeerId, remotePeerId) => {
+  if (!localPeerId || !remotePeerId) return true;
+  return localPeerId < remotePeerId;
+};
+
 const announceSignalingInfo = (room) => {
   signalingConns.forEach((conn) => {
     if (conn.connected) {
@@ -400,8 +405,10 @@ export class SignalingConn extends ws.WebsocketClient {
             switch (data.type) {
               case 'announce':
                 if (webrtcConns.size < room.provider.maxConns) {
-                  map.setIfUndefined(webrtcConns, data.from, () => new WebrtcConn(this, true, data.from, room));
-                  emitPeerChange();
+                  if (shouldInitiate(peerId, data.from)) {
+                    map.setIfUndefined(webrtcConns, data.from, () => new WebrtcConn(this, true, data.from, room));
+                    emitPeerChange();
+                  }
                 }
                 break;
               case 'signal':

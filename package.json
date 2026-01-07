@@ -14,15 +14,15 @@
     "format": "prettier -w ."
   },
   "dependencies": {
+    "@thaunknown/simple-peer": "^10.0.12",
     "@vueform/multiselect": "^2.6.11",
     "fflate": "^0.8.2",
     "fuse.js": "^7.1.0",
     "lucide-vue-next": "^0.562.0",
     "pinia": "^2.1.7",
-    "@thaunknown/simple-peer": "^10.0.12",
-    "y-protocols": "^1.0.6",
     "vue": "^3.4.0",
     "y-indexeddb": "^9.0.12",
+    "y-protocols": "^1.0.6",
     "yjs": "^13.6.28"
   },
   "devDependencies": {
@@ -39,6 +39,7 @@
     "typescript": "^5.4.5",
     "vite": "^5.0.0",
     "vite-plugin-pwa": "^0.20.0",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "ws": "^8.19.0"
   }
 }

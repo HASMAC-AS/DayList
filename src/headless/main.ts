@@ -121,6 +121,7 @@ const main = async () => {
     }
   };
 
+  const fetchFn = (...args: Parameters<typeof fetch>) => fetch(...args);
   const session = await createSyncSession({
     doc,
     room: keys.room,
@@ -128,7 +129,7 @@ const main = async () => {
     signaling,
     turnKey: keys.turnKey,
     turnEnabled: keys.turnEnabled !== false,
-    fetchFn: fetch,
+    fetchFn,
     storage: localStorage,
     platform: { isIPhone: false },
     onProvider: (next) => {

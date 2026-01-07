@@ -754,6 +754,7 @@ export const useDaylistStore = defineStore('daylist', () => {
 
     if (session.value) session.value.dispose();
     provider.value = null;
+    const fetchFn = (...args: Parameters<typeof fetch>) => fetch(...args);
     session.value = await createSyncSession({
       doc: ydocHandles.value,
       room,
@@ -761,7 +762,7 @@ export const useDaylistStore = defineStore('daylist', () => {
       signaling: sig,
       turnKey,
       turnEnabled,
-      fetchFn: fetch,
+      fetchFn,
       storage: localStorage,
       platform: { isIPhone },
       debugSignaling: !!logger.value?.enabled,
