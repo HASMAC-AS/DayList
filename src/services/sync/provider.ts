@@ -1,4 +1,4 @@
-import { SignalingConn, WebrtcConn, WebrtcProvider } from 'y-webrtc';
+import { SignalingConn, WebrtcConn, WebrtcProvider } from './webrtcProvider';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -409,10 +409,15 @@ export async function connectProvider(opts: {
     peerLastSeenAt.set(peerId, now);
     peerSeenOnConn.set(peerId, conn.url);
     opts.onPeerSeen?.({ peerId, reason, at: now, detail });
-    if (reason === 'signal:signal') return;
     const room = getRoom();
     const existingConn = room?.webrtcConns?.get(peerId);
     const healthy = existingConn ? peerIsHealthy(peerId, existingConn, now) : false;
+    if (reason === 'signal:signal') {
+      if (!healthy && shouldAttemptConnect(peerId, now)) {
+        ensureWebrtcConn(peerId, conn, 'signal_unhealthy', { ...detail, signalReason: reason });
+      }
+      return;
+    }
     const skipPolicy = reason === 'signal:welcome' || reason === 'signal:subscribe';
 
     if (skipPolicy) {

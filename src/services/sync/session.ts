@@ -1,4 +1,4 @@
-import type { WebrtcProvider } from 'y-webrtc';
+import type { WebrtcProvider } from './webrtcProvider';
 import { errToObj } from '../../lib/core';
 import { computeIceConfigs, iceKey, hasTurn, type IceConfig } from './icePolicy';
 import { connectProvider, type PeerConnectionUpdate, type SignalingStatus } from './provider';

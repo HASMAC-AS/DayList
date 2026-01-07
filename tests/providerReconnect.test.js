@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('y-webrtc', () => {
+vi.mock('../src/services/sync/webrtcProvider', () => {
   class Emitter {
     constructor() {
       this.listeners = new Map();
@@ -101,7 +101,7 @@ const buildProvider = async (overrides = {}) => {
 
 describe('webrtc reconnection', () => {
   beforeEach(async () => {
-    const { __created } = await import('y-webrtc');
+    const { __created } = await import('../src/services/sync/webrtcProvider');
     __created.length = 0;
   });
 
@@ -112,7 +112,7 @@ describe('webrtc reconnection', () => {
 
   it('replaces unhealthy peer on announce', async () => {
     const provider = await buildProvider();
-    const { __created } = await import('y-webrtc');
+    const { __created } = await import('../src/services/sync/webrtcProvider');
     const conn = provider.signalingConns[0];
 
     const unhealthyPeer = {
@@ -145,7 +145,7 @@ describe('webrtc reconnection', () => {
 
   it('connects on signal when peer has no healthy connection', async () => {
     const provider = await buildProvider();
-    const { __created } = await import('y-webrtc');
+    const { __created } = await import('../src/services/sync/webrtcProvider');
     const conn = provider.signalingConns[0];
 
     conn.emit('message', [
@@ -163,7 +163,7 @@ describe('webrtc reconnection', () => {
   it('marks peers disconnected on ICE failure', async () => {
     const onPeerState = vi.fn();
     const provider = await buildProvider({ onPeerState });
-    const { __created } = await import('y-webrtc');
+    const { __created } = await import('../src/services/sync/webrtcProvider');
     const conn = provider.signalingConns[0];
 
     conn.emit('message', [
@@ -185,7 +185,7 @@ describe('webrtc reconnection', () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
     const provider = await buildProvider();
-    const { __created } = await import('y-webrtc');
+    const { __created } = await import('../src/services/sync/webrtcProvider');
     const conn = provider.signalingConns[0];
 
     conn.emit('message', [

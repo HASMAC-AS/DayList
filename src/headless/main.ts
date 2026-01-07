@@ -1,4 +1,4 @@
-import type { WebrtcProvider } from 'y-webrtc';
+import type { WebrtcProvider } from '../services/sync/webrtcProvider';
 import { errToObj, parseSignalingList, redact } from '../lib/core';
 import { DEFAULT_SIGNALING } from '../services/sync/defaults';
 import { resolveKeysStrict } from '../services/sync/keys';

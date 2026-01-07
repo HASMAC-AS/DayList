@@ -1,7 +1,7 @@
 import { computed, reactive, ref, shallowRef } from 'vue';
 import * as Y from 'yjs';
 import Fuse from 'fuse.js';
-import type { WebrtcProvider } from 'y-webrtc';
+import type { WebrtcProvider } from '../services/sync/webrtcProvider';
 import { defineStore } from 'pinia';
 import {
   BOUNDARY_HOUR,
@@ -115,6 +115,7 @@ export const useDaylistStore = defineStore('daylist', () => {
   const webrtcPeers = ref<string[]>([]);
   const bcPeers = ref<string[]>([]);
   const lastPeerListAt = ref(0);
+  let iosResumeFallbackTimer: number | null = null;
   const peerStates = reactive<
     Record<
       string,
@@ -598,7 +599,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     logEvent('sync:kick_signaling', { reason });
     try {
       // Safari/iOS has a long history of half-open WebSocket/WebRTC state after a
-      // background/suspend. y-webrtc's disconnect/connect can leave sync stuck until
+      // background/suspend. The WebRTC provider's disconnect/connect can leave sync stuck until
       // a full reload, so force a provider restart instead.
       if (isIOSLike) {
         logEvent('sync:kick_ios_hard', { reason });
@@ -617,6 +618,10 @@ export const useDaylistStore = defineStore('daylist', () => {
     const calledAt = Date.now();
     if (calledAt - lastResumeAt < 2000) return;
     lastResumeAt = calledAt;
+    if (iosResumeFallbackTimer != null) {
+      window.clearTimeout(iosResumeFallbackTimer);
+      iosResumeFallbackTimer = null;
+    }
 
     // If we just came back from the background, remember how long we were away.
     // iOS often kills WebRTC/WebSocket connectivity while suspended.
@@ -645,6 +650,22 @@ export const useDaylistStore = defineStore('daylist', () => {
       // iOS WebKit frequently resumes with half-open sockets / ICE state. This manifests as
       // "Sync: on" but no updates until a full page reload. Force a full provider restart
       // on resume from background, and also when signaling looks stale.
+      if (isIOSLike && sleptMs > 0 && sleptMs <= IOS_BACKGROUND_GRACE_MS) {
+        logEvent('sync:resume_ios_soft', { reason, sleptMs });
+        if (session.value && providerConnected.value) {
+          session.value.softReconnect(`resume:${reason}`);
+        } else {
+          connectSync();
+        }
+        iosResumeFallbackTimer = window.setTimeout(() => {
+          const connectedPeerCount = Object.values(peerStates).filter((state) => state.connected).length;
+          const hasActivePeers = connectedPeerCount > 0 || peerCount.value > 0;
+          if (hasActivePeers) return;
+          logEvent('sync:resume_ios_fallback', { reason, sleptMs });
+          hardReconnect(`resume:${reason}:fallback`);
+        }, 3500);
+        return;
+      }
       if (isIOSLike && (staleSignal || sleptMs > IOS_BACKGROUND_GRACE_MS)) {
         logEvent('sync:resume_ios_hard', { reason, sleptMs, ageMs: age, staleSignal });
         hardReconnect(`resume:${reason}`);

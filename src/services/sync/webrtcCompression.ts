@@ -1,4 +1,4 @@
-import Peer from 'simple-peer/simplepeer.min.js';
+import Peer from '@thaunknown/simple-peer/lite.js';
 import { deflateSync, gzipSync, inflateSync, ungzipSync } from 'fflate';
 import { errToObj } from '../../lib/core';
 

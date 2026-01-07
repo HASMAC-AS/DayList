@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-vi.mock('y-webrtc', () => {
+vi.mock('../src/services/sync/webrtcProvider', () => {
   class Emitter {
     constructor() {
       this.listeners = new Map();
