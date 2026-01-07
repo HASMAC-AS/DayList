@@ -34,7 +34,7 @@
   --panel-soft-3: rgba(255, 255, 255, 0.92);
   --panel-soft-4: rgba(255, 255, 255, 0.98);
   --panel-tint: var(--list-tint-strong);
-  --action-reveal-bg: linear-gradient(90deg, var(--list-tint-strong), rgba(255, 255, 255, 0.96));
+  --action-reveal-bg: linear-gradient(90deg, var(--list-tint-strong), var(--panel));
   --input-placeholder: rgba(91, 100, 114, 0.6);
   --toast-bg: rgba(12, 17, 27, 0.92);
   --toast-border: rgba(15, 23, 42, 0.24);
@@ -1471,7 +1471,7 @@ details .bd {
     --list-tint: var(--list-tint-dark);
     --list-tint-2: var(--list-tint-dark-2);
     --panel-tint: var(--list-tint-strong-dark);
-    --action-reveal-bg: linear-gradient(90deg, var(--list-tint-strong-dark), rgba(15, 23, 42, 0.96));
+    --action-reveal-bg: linear-gradient(90deg, var(--list-tint-strong-dark), var(--panel));
     --input-placeholder: rgba(226, 232, 240, 0.5);
     --toast-bg: rgba(2, 6, 23, 0.9);
     --toast-border: rgba(148, 163, 184, 0.22);
