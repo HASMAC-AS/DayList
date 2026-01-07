@@ -1,4 +1,3 @@
-import Peer from '@thaunknown/simple-peer/lite.js';
 import { deflateSync, gzipSync, inflateSync, ungzipSync } from 'fflate';
 import { errToObj } from '../../lib/core';
 
@@ -87,17 +86,23 @@ const handleCompressionError = (peer: any, error: unknown, stage: 'send' | 'recv
   }
 };
 
-export function ensureWebrtcCompression(opts?: { format?: CompressionFormat; onLog?: LogFn }) {
+export function ensureWebrtcCompression(
+  PeerCtor: { prototype?: { send?: (chunk: unknown) => void; _onChannelMessage?: (event: { data?: unknown }) => void } },
+  opts?: { format?: CompressionFormat; onLog?: LogFn }
+) {
   if (patched) return;
   if (typeof RTCPeerConnection === 'undefined') return;
+  if (!PeerCtor || !PeerCtor.prototype) return;
+  if (typeof PeerCtor.prototype.send !== 'function') return;
+  if (typeof PeerCtor.prototype._onChannelMessage !== 'function') return;
 
   const format = opts?.format ?? DEFAULT_FORMAT;
   patched = true;
   opts?.onLog?.('webrtc:compression_enabled', { format });
-  const originalSend = Peer.prototype.send;
-  const originalOnChannelMessage = Peer.prototype._onChannelMessage;
+  const originalSend = PeerCtor.prototype.send;
+  const originalOnChannelMessage = PeerCtor.prototype._onChannelMessage;
 
-  Peer.prototype.send = function sendCompressed(chunk: unknown) {
+  PeerCtor.prototype.send = function sendCompressed(chunk: unknown) {
     const peer = this as any;
     queueTask(sendQueue, peer, async () => {
       try {
@@ -112,7 +117,7 @@ export function ensureWebrtcCompression(opts?: { format?: CompressionFormat; onL
     });
   };
 
-  Peer.prototype._onChannelMessage = function onCompressedMessage(event: { data?: unknown }) {
+  PeerCtor.prototype._onChannelMessage = function onCompressedMessage(event: { data?: unknown }) {
     const peer = this as any;
     if (peer.destroyed) return;
     queueTask(recvQueue, peer, async () => {

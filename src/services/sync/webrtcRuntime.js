@@ -9,6 +9,7 @@ import * as buffer from 'lib0/buffer';
 import { createMutex } from 'lib0/mutex';
 import * as syncProtocol from 'y-protocols/sync';
 import * as awarenessProtocol from 'y-protocols/awareness';
+import { ensureWebrtcCompression } from './webrtcCompression';
 import { decrypt, decryptJson, encrypt, encryptJson } from './webrtcCrypto';
 
 let peerCtorPromise = null;
@@ -20,6 +21,11 @@ export const loadPeerCtor = () => {
   peerCtorPromise = import('@thaunknown/simple-peer/lite.js')
     .then((mod) => {
       peerCtor = mod?.default ?? mod;
+      try {
+        ensureWebrtcCompression(peerCtor);
+      } catch (err) {
+        console.error('[webrtc] Failed to enable compression:', err);
+      }
       return peerCtor;
     })
     .catch((err) => {
