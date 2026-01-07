@@ -104,7 +104,7 @@
           <select v-model="logLevel" class="diag-select" aria-label="Diagnostics log level">
             <option v-for="level in LOG_LEVELS" :key="level" :value="level">{{ level }}</option>
           </select>
-          <div class="hint">Shows entries at this level and higher.</div>
+          <div class="hint">Logs entries at this level and higher.</div>
         </div>
       </div>
     </div>

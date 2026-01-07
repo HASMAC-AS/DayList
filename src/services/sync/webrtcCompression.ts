@@ -17,6 +17,16 @@ let patched = false;
 const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
 const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
 
+const canSendPeer = (peer: any) => {
+  if (!peer) return false;
+  if (peer.destroyed || peer.destroying) return false;
+  if (peer.connected === false) return false;
+  const channel = peer._channel || peer.channel || peer.dataChannel;
+  const state = channel && typeof channel.readyState === 'string' ? channel.readyState : null;
+  if (state && state !== 'open') return false;
+  return true;
+};
+
 const toUint8 = async (input: unknown): Promise<Uint8Array> => {
   if (input instanceof Uint8Array) return input;
   if (input instanceof ArrayBuffer) return new Uint8Array(input);
@@ -106,10 +116,10 @@ export function ensureWebrtcCompression(
     const peer = this as any;
     queueTask(sendQueue, peer, async () => {
       try {
-        if (peer.destroyed || peer.destroying) return;
+        if (!canSendPeer(peer)) return;
         const payload = await packPayload(chunk);
         const compressed = await compress(payload, format);
-        if (peer.destroyed || peer.destroying) return;
+        if (!canSendPeer(peer)) return;
         originalSend.call(peer, compressed);
       } catch (error) {
         handleCompressionError(peer, error, 'send', opts?.onLog);
