@@ -15,7 +15,7 @@ export class WebrtcProvider extends ObservableV2 {
     roomName,
     doc,
     {
-      signaling = ['wss://y-webrtc-eu.fly.dev'],
+      signaling = ['wss://daylist-signaling.onrender.com/ws/'],
       password = null,
       awareness = new awarenessProtocol.Awareness(doc),
       maxConns = 20 + math.floor(random.rand() * 15),
