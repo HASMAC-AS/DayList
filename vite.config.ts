@@ -8,6 +8,9 @@ const buildTime = new Date().toISOString();
 
 export default defineConfig({
   base: './',
+  resolve: {
+    conditions: ['bare', 'browser', 'default']
+  },
   define: {
     __BUILD_ID__: JSON.stringify(buildId),
     __BUILD_TIME__: JSON.stringify(buildTime)
