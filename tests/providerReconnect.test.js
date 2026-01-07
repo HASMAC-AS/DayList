@@ -148,6 +148,41 @@ describe('webrtc reconnection', () => {
     expect(__created.length).toBe(1);
   });
 
+  it('reconnects on announce after a recent drop', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
+    const provider = await buildProvider();
+    const { __created } = await import('../src/services/sync/webrtcProvider');
+    const conn = provider.signalingConns[0];
+
+    conn.emit('message', [
+      {
+        type: 'publish',
+        topic: 'room',
+        data: { from: 'peer-a', type: 'announce' }
+      }
+    ]);
+    await flush();
+
+    const firstConn = __created[0];
+    firstConn.peer._pc.iceConnectionState = 'failed';
+    firstConn.peer._pc.connectionState = 'failed';
+
+    vi.advanceTimersByTime(3000);
+
+    conn.emit('message', [
+      {
+        type: 'publish',
+        topic: 'room',
+        data: { from: 'peer-a', type: 'announce' }
+      }
+    ]);
+    await flush();
+
+    expect(__created.length).toBe(2);
+    expect(provider.room.webrtcConns.get('peer-a')).not.toBe(firstConn);
+  });
+
   it('connects on signal when peer has no healthy connection', async () => {
     const provider = await buildProvider();
     const { __created } = await import('../src/services/sync/webrtcProvider');

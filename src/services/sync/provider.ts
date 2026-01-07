@@ -474,6 +474,11 @@ export async function connectProvider(opts: {
       return;
     }
 
+    if (!healthy && !isNew && !isStale && shouldAttemptConnect(peerId, now) && shouldInitiateWith(peerId)) {
+      ensureWebrtcConn(peerId, conn, 'signal_unhealthy', { ...detail, signalReason: reason });
+      return;
+    }
+
     if ((isNew || isStale) && shouldInitiateWith(peerId)) {
       ensureWebrtcConn(peerId, conn, isNew ? 'new_peer' : 'stale_peer', detail);
     }
