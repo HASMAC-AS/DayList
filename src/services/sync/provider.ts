@@ -692,12 +692,7 @@ export async function connectProvider(opts: {
             .catch(() => {});
         }
       }
-      if (msg.type === 'welcome' && Array.isArray(msg.peers) && msg.peers.length > 0) {
-        msg.peers.forEach((peerId) => {
-          if (typeof peerId !== 'string' || !peerId) return;
-          recordPeerSeen(peerId, conn, 'signal:welcome', { count: msg.peers.length });
-        });
-      }
+      // Welcome peers are signaling-connection IDs, not WebRTC room peer IDs.
     });
 
     const originalSend = conn.send.bind(conn);
