@@ -36,7 +36,8 @@ export class WebrtcProvider extends ObservableV2 {
     this.peerOpts = peerOpts;
     this.key = password ? deriveKey(password, roomName) : Promise.resolve(null);
     this.room = null;
-    this.key.then((key) => {
+    this.key
+      .then((key) => {
       if (this._destroyed) return;
       this.room = openRoom(doc, this, roomName, key);
       if (this._destroyed) {
@@ -51,7 +52,8 @@ export class WebrtcProvider extends ObservableV2 {
         this.room.disconnect();
       }
       emitStatus(this);
-    });
+      })
+      .catch(() => {});
     this.connect();
     this.destroy = this.destroy.bind(this);
     doc.on('destroy', this.destroy);
@@ -98,13 +100,15 @@ export class WebrtcProvider extends ObservableV2 {
     this._destroyed = true;
     this.disconnect();
     this.doc.off('destroy', this.destroy);
-    this.key.then(() => {
-      if (this.room) {
-        this.room.destroy();
-        this.room = null;
-      }
-      rooms.delete(this.roomName);
-    });
+    this.key
+      .then(() => {
+        if (this.room) {
+          this.room.destroy();
+          this.room = null;
+        }
+        rooms.delete(this.roomName);
+      })
+      .catch(() => {});
     super.destroy();
   }
 }

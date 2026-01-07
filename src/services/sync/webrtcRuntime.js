@@ -198,11 +198,13 @@ export class WebrtcConn {
 }
 
 const broadcastBcMessage = (room, m) =>
-  encrypt(m, room.key).then((data) =>
-    room.mux(() => {
-      bc.publish(room.name, data);
-    })
-  );
+  encrypt(m, room.key)
+    .then((data) =>
+      room.mux(() => {
+        bc.publish(room.name, data);
+      })
+    )
+    .catch(() => {});
 
 const broadcastRoomMessage = (room, m) => {
   if (room.bcconnected) broadcastBcMessage(room, m);
@@ -249,14 +251,16 @@ export class Room {
     this.mux = createMutex();
     this.bcconnected = false;
     this._bcSubscriber = (data) =>
-      decrypt(new Uint8Array(data), key).then((m) =>
-        this.mux(() => {
-          const reply = readMessage(this, m, () => {});
-          if (reply) {
-            broadcastBcMessage(this, encoding.toUint8Array(reply));
-          }
-        })
-      );
+      decrypt(new Uint8Array(data), key)
+        .then((m) =>
+          this.mux(() => {
+            const reply = readMessage(this, m, () => {});
+            if (reply) {
+              broadcastBcMessage(this, encoding.toUint8Array(reply));
+            }
+          })
+        )
+        .catch(() => {});
     this._docUpdateHandler = (update) => {
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
@@ -355,9 +359,11 @@ export const openRoom = (doc, provider, name, key) => {
 
 const publishSignalingMessage = (conn, room, data) => {
   if (room.key) {
-    encryptJson(data, room.key).then((encrypted) => {
-      conn.send({ type: 'publish', topic: room.name, data: buffer.toBase64(encrypted) });
-    });
+    encryptJson(data, room.key)
+      .then((encrypted) => {
+        conn.send({ type: 'publish', topic: room.name, data: buffer.toBase64(encrypted) });
+      })
+      .catch(() => {});
   } else {
     conn.send({ type: 'publish', topic: room.name, data });
   }
@@ -438,7 +444,7 @@ export class SignalingConn extends ws.WebsocketClient {
           };
           if (room.key) {
             if (typeof m.data === 'string') {
-              decryptJson(buffer.fromBase64(m.data), room.key).then(execMessage);
+              decryptJson(buffer.fromBase64(m.data), room.key).then(execMessage).catch(() => {});
             }
           } else {
             execMessage(m.data);

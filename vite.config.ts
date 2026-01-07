@@ -10,9 +10,10 @@ export default defineConfig({
   base: './',
   resolve: {
     conditions: ['browser', 'default'],
-    alias: {
-      events: 'events'
-    }
+    alias: [
+      { find: /^streamx$/, replacement: resolve(__dirname, 'src/lib/streamxShim.js') },
+      { find: /^events$/, replacement: 'events' }
+    ]
   },
   define: {
     __BUILD_ID__: JSON.stringify(buildId),

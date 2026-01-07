@@ -107,7 +107,9 @@ export async function connectProvider(opts: {
   const provider = new WebrtcProvider(opts.room, opts.doc.ydoc, {
     password: opts.enc,
     signaling: opts.signaling,
+    // Unlimited peers: rooms are expected to stay human-scale; stale checks handle cleanup.
     maxConns: Number.POSITIVE_INFINITY,
+    // Keep bc peers in the list for diagnostics and peer visibility.
     filterBcConns: false,
     peerOpts: {
       config: {
@@ -706,11 +708,22 @@ export async function connectProvider(opts: {
     };
   };
 
-  if (Array.isArray(provider.signalingConns)) {
-    provider.signalingConns.forEach((conn) => {
-      if (conn) attachConn(conn as SignalingConn);
-    });
-  }
+  const reattachSignaling = () => {
+    if (Array.isArray(provider.signalingConns)) {
+      provider.signalingConns.forEach((conn) => {
+        if (conn) attachConn(conn as SignalingConn);
+      });
+    }
+  };
+
+  const originalConnect = provider.connect.bind(provider);
+  provider.connect = () => {
+    const result = originalConnect();
+    reattachSignaling();
+    return result;
+  };
+
+  reattachSignaling();
 
   return provider;
 }
