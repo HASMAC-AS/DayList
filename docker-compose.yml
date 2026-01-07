@@ -13,8 +13,8 @@ services:
       DAYLIST_SETTINGS_FILE: ${DAYLIST_SETTINGS_FILE:-/data/settings.json}
       DAYLIST_PROFILE_DIR: /data/chrome-profile
     volumes:
-      - ${DAYLIST_SETTINGS_HOST_PATH:-./data/}:/data/:ro
-      - daylist-peer-data:/data
+      - ${DAYLIST_SETTINGS_HOST_PATH:-./data/settings.json}:/data/settings.json:ro
+      - daylist-peer-data:/data/chrome-profile
     restart: unless-stopped
 
 volumes:

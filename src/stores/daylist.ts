@@ -57,6 +57,16 @@ import { startVersionPolling } from '../services/versionCheck';
 
 const HISTORY_DAYS = 7;
 const ACTIVE_LIST_KEY = 'daylist.activeListId.v1';
+const LS_DIAG_LOG_LEVEL = 'daylist.diagnostics.logLevel.v1';
+
+type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+
+const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
+  DEBUG: 0,
+  INFO: 1,
+  WARN: 2,
+  ERROR: 3
+};
 
 export const useDaylistStore = defineStore('daylist', () => {
   // iOS Safari (and iOS PWAs) aggressively suspend pages in the background.
@@ -166,14 +176,36 @@ export const useDaylistStore = defineStore('daylist', () => {
     Array<{
       id: string;
       ts: number;
-      level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
+      level: LogLevel;
       event: string;
       data: unknown;
     }>
   >([]);
   let logCounter = 0;
+  const logLevel = ref<LogLevel>(
+    (() => {
+      try {
+        const raw = localStorage.getItem(LS_DIAG_LOG_LEVEL);
+        if (raw && raw in LOG_LEVEL_ORDER) return raw as LogLevel;
+      } catch {
+        // ignore
+      }
+      return 'WARN';
+    })()
+  );
 
-  const pushLog = (event: string, data: unknown = null, level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' = 'INFO') => {
+  const setDiagnosticsLogLevel = (level: LogLevel) => {
+    logLevel.value = level;
+    try {
+      localStorage.setItem(LS_DIAG_LOG_LEVEL, level);
+    } catch {
+      // ignore
+    }
+  };
+
+  const shouldLog = (level: LogLevel) => LOG_LEVEL_ORDER[level] >= LOG_LEVEL_ORDER[logLevel.value];
+
+  const pushLog = (event: string, data: unknown = null, level: LogLevel = 'INFO') => {
     const entry = {
       id: `${Date.now()}-${logCounter++}`,
       ts: Date.now(),
@@ -184,7 +216,8 @@ export const useDaylistStore = defineStore('daylist', () => {
     logEntries.value = [...logEntries.value.slice(-299), entry];
   };
 
-  const logEvent = (event: string, data: unknown = null, level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' = 'INFO') => {
+  const logEvent = (event: string, data: unknown = null, level: LogLevel = 'INFO') => {
+    if (!shouldLog(level)) return;
     pushLog(event, data, level);
     logger.value?.log(event, data, level);
   };
@@ -1482,6 +1515,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     peerStates,
     iceState,
     logEntries,
+    logLevel,
     dayKey,
     dayLabel,
     snapshotActive,
@@ -1508,6 +1542,7 @@ export const useDaylistStore = defineStore('daylist', () => {
     parseDueInput,
     formatDueInput,
     buildDefaultDue,
+    setDiagnosticsLogLevel,
     clearDiagnosticsLog: () => {
       logEntries.value = [];
     }

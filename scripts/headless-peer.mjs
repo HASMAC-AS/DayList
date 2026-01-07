@@ -125,10 +125,17 @@ const normalizeSettings = (input) => {
   };
 };
 
+const resolveSettingsPath = async (settingsPath) => {
+  const stat = await fs.stat(settingsPath).catch(() => null);
+  if (stat && stat.isDirectory()) return resolve(settingsPath, 'settings.json');
+  return settingsPath;
+};
+
 const loadSettingsFile = async (settingsPath, required) => {
   if (!settingsPath) return null;
   try {
-    const raw = await fs.readFile(settingsPath, 'utf8');
+    const resolvedPath = await resolveSettingsPath(settingsPath);
+    const raw = await fs.readFile(resolvedPath, 'utf8');
     const parsed = JSON.parse(raw);
     return normalizeSettings(parsed);
   } catch (error) {

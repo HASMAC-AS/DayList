@@ -556,6 +556,11 @@ h1 {
   border-bottom: none;
 }
 
+.diag-select {
+  width: auto;
+  min-width: 140px;
+}
+
 .diag-list {
   display: flex;
   flex-direction: column;

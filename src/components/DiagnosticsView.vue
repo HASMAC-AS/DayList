@@ -96,6 +96,19 @@
       </div>
     </div>
 
+    <div class="settings-block">
+      <div class="section-title">Logging</div>
+      <div class="diag-row">
+        <div class="diag-label">Log level</div>
+        <div class="diag-value">
+          <select v-model="logLevel" class="diag-select" aria-label="Diagnostics log level">
+            <option v-for="level in LOG_LEVELS" :key="level" :value="level">{{ level }}</option>
+          </select>
+          <div class="hint">Shows entries at this level and higher.</div>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-block log-block">
       <div class="section-title">PWA lifecycle (iOS)</div>
       <div class="log-actions">
@@ -121,7 +134,7 @@
         <button class="chip ghost" type="button" @click="store.clearDiagnosticsLog">Clear</button>
       </div>
       <div ref="logEl" class="log-stream">
-        <div v-for="entry in store.logEntries" :key="entry.id" class="log-entry">
+        <div v-for="entry in filteredLogEntries" :key="entry.id" class="log-entry">
           <div class="log-meta">
             <span class="log-time">{{ formatTime(entry.ts) }}</span>
             <span class="log-level" :class="entry.level.toLowerCase()">{{ entry.level }}</span>
@@ -141,6 +154,8 @@ import { BUILD_ID, BUILD_TIME } from '../lib/build';
 import { useDaylistStore } from '../stores/daylist';
 import { useToastBus } from '../services/toast';
 
+type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+
 const store = useDaylistStore();
 const { show: toast } = useToastBus();
 const rootEl = ref<HTMLElement | null>(null);
@@ -150,6 +165,17 @@ const buildId = BUILD_ID;
 const buildTime = BUILD_TIME;
 const diagSize = ref({ width: '-', height: '-' });
 let resizeObserver: ResizeObserver | null = null;
+const LOG_LEVELS: LogLevel[] = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
+  DEBUG: 0,
+  INFO: 1,
+  WARN: 2,
+  ERROR: 3
+};
+const logLevel = computed<LogLevel>({
+  get: () => store.logLevel,
+  set: (value) => store.setDiagnosticsLogLevel(value)
+});
 
 const buildTimeLabel = computed(() => {
   if (!buildTime) return '-';
@@ -202,8 +228,13 @@ const isIosLifecycleEvent = (entry: { event: string; data: unknown }) => {
   return false;
 };
 
+const filteredLogEntries = computed(() => {
+  const minLevel = LOG_LEVEL_ORDER[logLevel.value];
+  return store.logEntries.filter((entry) => LOG_LEVEL_ORDER[entry.level] >= minLevel);
+});
+
 const iosLifecycleEntries = computed(() => {
-  return store.logEntries.filter((entry) => isIosLifecycleEvent(entry));
+  return filteredLogEntries.value.filter((entry) => isIosLifecycleEvent(entry));
 });
 
 const logTimeFormatter = new Intl.DateTimeFormat('en-US', {
@@ -303,7 +334,7 @@ const buildSyncStateCopy = () => {
 
 const buildDiagnosticsCopy = () => {
   const parts: string[] = [];
-  const logText = store.logEntries.length ? buildLogCopy(store.logEntries) : '(empty)';
+  const logText = filteredLogEntries.value.length ? buildLogCopy(filteredLogEntries.value) : '(empty)';
   parts.push('LIVE_LOG', logText);
   parts.push('SYNC_STATE', JSON.stringify(buildSyncStateCopy(), null, 2));
   const state = store.exportJson();
@@ -347,7 +378,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', updateDiagSize);
 });
 watch(
-  () => store.logEntries.length,
+  () => filteredLogEntries.value.length,
   async () => {
     await nextTick();
     scrollToBottom(logEl.value);
