@@ -113,4 +113,4 @@ export class WebrtcProvider extends ObservableV2 {
   }
 }
 
-export { SignalingConn, WebrtcConn } from './webrtcRuntime';
+export { SignalingConn, WebrtcConn, loadPeerCtor } from './webrtcRuntime';

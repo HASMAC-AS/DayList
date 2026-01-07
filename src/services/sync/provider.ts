@@ -1,4 +1,4 @@
-import { SignalingConn, WebrtcConn, WebrtcProvider } from './webrtcProvider';
+import { SignalingConn, WebrtcConn, WebrtcProvider, loadPeerCtor } from './webrtcProvider';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -391,19 +391,46 @@ export async function connectProvider(opts: {
       }
     }
 
-    try {
-      logConnectAttempt(peerId, reason, detail, 'create');
-      ensureNegotiationStart(peerId);
-      const webrtcConn = new WebrtcConn(conn, initiator, peerId, room);
-      room.webrtcConns.set(peerId, webrtcConn);
-      opts.onLog?.('webrtc:manual_connect', { peerId, reason, detail });
-      emitPeerState({ peerId, event: 'connect_created', reason, detail, connected: false });
-      hookPeer(peerId, webrtcConn);
-    } catch (error) {
-      opts.onLog?.('webrtc:manual_connect_failed', { peerId, reason, error: errToObj(error) }, 'WARN');
-      logConnectAttempt(peerId, reason, detail, 'failed', error, 'WARN');
-      emitPeerState({ peerId, event: 'connect_failed', reason, detail, error, connected: false });
-    }
+    logConnectAttempt(peerId, reason, detail, 'create');
+    ensureNegotiationStart(peerId);
+    loadPeerCtor().then((PeerCtor) => {
+      if (!PeerCtor) {
+        opts.onLog?.('webrtc:peer_ctor_unavailable', { peerId, reason, detail }, 'WARN');
+        logConnectAttempt(peerId, reason, detail, 'skip_peer_ctor');
+        return;
+      }
+      const roomNow = getRoom();
+      if (!roomNow) {
+        pendingPeers.add(peerId);
+        logConnectAttempt(peerId, reason, detail, 'defer_no_room');
+        return;
+      }
+      if (peerId === roomNow.peerId) {
+        logConnectAttempt(peerId, reason, detail, 'skip_self');
+        return;
+      }
+      const existingConn = roomNow.webrtcConns?.get(peerId);
+      if (existingConn) {
+        if (peerIsHealthy(peerId, existingConn)) {
+          logConnectAttempt(peerId, reason, detail, 'skip_healthy');
+          hookPeer(peerId, existingConn);
+        } else {
+          logConnectAttempt(peerId, reason, detail, 'skip_race_unhealthy');
+        }
+        return;
+      }
+      try {
+        const webrtcConn = new WebrtcConn(PeerCtor, conn, initiator, peerId, roomNow);
+        roomNow.webrtcConns.set(peerId, webrtcConn);
+        opts.onLog?.('webrtc:manual_connect', { peerId, reason, detail });
+        emitPeerState({ peerId, event: 'connect_created', reason, detail, connected: false });
+        hookPeer(peerId, webrtcConn);
+      } catch (error) {
+        opts.onLog?.('webrtc:manual_connect_failed', { peerId, reason, error: errToObj(error) }, 'WARN');
+        logConnectAttempt(peerId, reason, detail, 'failed', error, 'WARN');
+        emitPeerState({ peerId, event: 'connect_failed', reason, detail, error, connected: false });
+      }
+    });
   };
 
   const shouldAttemptConnect = (peerId: string, now = Date.now()) => {

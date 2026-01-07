@@ -22,7 +22,9 @@ vi.mock('../src/services/sync/webrtcRuntime', () => {
     return room;
   };
 
-  return { SignalingConn, signalingConns, rooms, openRoom, WebrtcConn: class {} };
+  const loadPeerCtor = () => Promise.resolve(null);
+
+  return { SignalingConn, signalingConns, rooms, openRoom, WebrtcConn: class {}, loadPeerCtor };
 });
 
 const flush = () => Promise.resolve();

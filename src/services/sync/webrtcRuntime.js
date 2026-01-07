@@ -7,10 +7,27 @@ import * as decoding from 'lib0/decoding';
 import * as bc from 'lib0/broadcastchannel';
 import * as buffer from 'lib0/buffer';
 import { createMutex } from 'lib0/mutex';
-import Peer from '@thaunknown/simple-peer/lite.js';
 import * as syncProtocol from 'y-protocols/sync';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import { decrypt, decryptJson, encrypt, encryptJson } from './webrtcCrypto';
+
+let peerCtorPromise = null;
+let peerCtor = null;
+
+export const loadPeerCtor = () => {
+  if (peerCtor) return Promise.resolve(peerCtor);
+  if (peerCtorPromise) return peerCtorPromise;
+  peerCtorPromise = import('@thaunknown/simple-peer/lite.js')
+    .then((mod) => {
+      peerCtor = mod?.default ?? mod;
+      return peerCtor;
+    })
+    .catch((err) => {
+      console.error('[webrtc] Failed to load Peer implementation:', err);
+      return null;
+    });
+  return peerCtorPromise;
+};
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_QUERY_AWARENESS = 3;
@@ -123,14 +140,14 @@ const broadcastWebrtcConn = (room, m) => {
 };
 
 export class WebrtcConn {
-  constructor(signalingConn, initiator, remotePeerId, room) {
+  constructor(PeerCtor, signalingConn, initiator, remotePeerId, room) {
     this.room = room;
     this.remotePeerId = remotePeerId;
     this.glareToken = undefined;
     this.closed = false;
     this.connected = false;
     this.synced = false;
-    this.peer = new Peer({ initiator, ...room.provider.peerOpts });
+    this.peer = new PeerCtor({ initiator, ...room.provider.peerOpts });
     this.peer.on('signal', (signal) => {
       if (this.glareToken === undefined) {
         this.glareToken = Date.now() + Math.random();
@@ -397,24 +414,29 @@ export class SignalingConn extends ws.WebsocketClient {
             ) {
               return;
             }
-            const emitPeerChange = webrtcConns.has(data.from)
-              ? () => {}
-              : () =>
-                  room.provider.emit('peers', [
-                    {
-                      removed: [],
-                      added: [data.from],
-                      webrtcPeers: Array.from(room.webrtcConns.keys()),
-                      bcPeers: Array.from(room.bcConns)
-                    }
-                  ]);
+            const emitPeerChange = () =>
+              room.provider.emit('peers', [
+                {
+                  removed: [],
+                  added: [data.from],
+                  webrtcPeers: Array.from(room.webrtcConns.keys()),
+                  bcPeers: Array.from(room.bcConns)
+                }
+              ]);
             switch (data.type) {
               case 'announce':
-                if (webrtcConns.size < room.provider.maxConns) {
-                  if (shouldInitiate(peerId, data.from)) {
-                    map.setIfUndefined(webrtcConns, data.from, () => new WebrtcConn(this, true, data.from, room));
+                if (webrtcConns.size < room.provider.maxConns && shouldInitiate(peerId, data.from)) {
+                  loadPeerCtor().then((PeerCtor) => {
+                    if (!PeerCtor) return;
+                    if (webrtcConns.size >= room.provider.maxConns) return;
+                    if (webrtcConns.has(data.from)) return;
+                    map.setIfUndefined(
+                      webrtcConns,
+                      data.from,
+                      () => new WebrtcConn(PeerCtor, this, true, data.from, room)
+                    );
                     emitPeerChange();
-                  }
+                  });
                 }
                 break;
               case 'signal':
@@ -432,10 +454,22 @@ export class SignalingConn extends ws.WebsocketClient {
                   if (existingConn) existingConn.glareToken = undefined;
                 }
                 if (data.to === peerId) {
-                  map
-                    .setIfUndefined(webrtcConns, data.from, () => new WebrtcConn(this, false, data.from, room))
-                    .peer.signal(data.signal);
-                  emitPeerChange();
+                  const existingConn = webrtcConns.get(data.from);
+                  if (existingConn) {
+                    existingConn.peer.signal(data.signal);
+                  } else {
+                    loadPeerCtor().then((PeerCtor) => {
+                      if (!PeerCtor) return;
+                      const hadConn = webrtcConns.has(data.from);
+                      const conn = map.setIfUndefined(
+                        webrtcConns,
+                        data.from,
+                        () => new WebrtcConn(PeerCtor, this, false, data.from, room)
+                      );
+                      conn.peer.signal(data.signal);
+                      if (!hadConn) emitPeerChange();
+                    });
+                  }
                 }
                 break;
               default:

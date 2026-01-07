@@ -71,7 +71,7 @@ vi.mock('../src/services/sync/webrtcProvider', () => {
   }
 
   class WebrtcConn {
-    constructor(signalingConn, initiator, remotePeerId, room) {
+    constructor(_PeerCtor, signalingConn, initiator, remotePeerId, room) {
       this.remotePeerId = remotePeerId;
       this.peer = new MockPeer();
       this.closed = false;
@@ -83,8 +83,12 @@ vi.mock('../src/services/sync/webrtcProvider', () => {
     }
   }
 
-  return { WebrtcProvider, SignalingConn, WebrtcConn, __created: created };
+  const loadPeerCtor = () => Promise.resolve(MockPeer);
+
+  return { WebrtcProvider, SignalingConn, WebrtcConn, loadPeerCtor, __created: created };
 });
+
+const flush = () => Promise.resolve();
 
 const buildProvider = async (overrides = {}) => {
   const { connectProvider } = await import('../src/services/sync/provider');
@@ -137,6 +141,7 @@ describe('webrtc reconnection', () => {
         data: { from: 'peer-a', type: 'announce' }
       }
     ]);
+    await flush();
 
     expect(existing.destroy).toHaveBeenCalledTimes(1);
     expect(provider.room.webrtcConns.get('peer-a')).not.toBe(existing);
@@ -155,6 +160,7 @@ describe('webrtc reconnection', () => {
         data: { from: 'peer-a', type: 'signal', signal: { type: 'offer' } }
       }
     ]);
+    await flush();
 
     expect(provider.room.webrtcConns.has('peer-a')).toBe(true);
     expect(__created.length).toBe(1);
@@ -173,6 +179,7 @@ describe('webrtc reconnection', () => {
         data: { from: 'peer-a', type: 'announce' }
       }
     ]);
+    await flush();
 
     const webrtcConn = __created[0];
     webrtcConn.peer.emit('iceStateChange', ['failed']);
@@ -195,6 +202,7 @@ describe('webrtc reconnection', () => {
         data: { from: 'peer-a', type: 'announce' }
       }
     ]);
+    await flush();
 
     const webrtcConn = __created[0];
     webrtcConn.peer.connected = true;

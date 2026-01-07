@@ -51,10 +51,14 @@ vi.mock('../src/services/sync/webrtcProvider', () => {
   }
 
   class WebrtcConn {
-    constructor() {}
+    constructor(_PeerCtor) {
+      this._peerCtor = _PeerCtor;
+    }
   }
 
-  return { WebrtcProvider, SignalingConn, WebrtcConn };
+  const loadPeerCtor = () => Promise.resolve(() => ({}));
+
+  return { WebrtcProvider, SignalingConn, WebrtcConn, loadPeerCtor };
 });
 
 const buildProvider = async () => {
