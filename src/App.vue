@@ -89,10 +89,14 @@ const syncReady = computed(() => store.syncReady);
 const listColor = computed(() => store.activeList?.color || DEFAULT_LIST_COLOR);
 const pendingScrollY = ref<number | null>(null);
 let scrollTicking = false;
+let lastHistoryUpdate = 0;
+let historyUpdateTimer: number | null = null;
+let lastRecordedScrollY: number | null = null;
 const showSyncIndicator = ref(false);
 let syncDelayTimer: number | null = null;
 let syncInteractionListening = false;
 const syncInteractionOptions: AddEventListenerOptions = { capture: true };
+const HISTORY_SCROLL_THROTTLE_MS = 250;
 
 const BASE_ACCENT_LIGHT = '#1f4b99';
 const BASE_ACCENT_DARK = '#6ea8ff';
@@ -103,12 +107,35 @@ const ensureHistoryState = (next: 'main' | 'settings' | 'diagnostics', replace =
   const state = { ...(history.state || {}), view: next, scrollY };
   if (replace) history.replaceState(state, '', window.location.href);
   else history.pushState(state, '', window.location.href);
+  lastRecordedScrollY = scrollY;
 };
 
 const updateHistoryScroll = () => {
   if (!history.state) return;
   const scrollY = getScrollY();
+  if (lastRecordedScrollY === scrollY) return;
+  lastRecordedScrollY = scrollY;
   history.replaceState({ ...history.state, scrollY }, '', window.location.href);
+};
+
+const scheduleHistoryScroll = () => {
+  const now = Date.now();
+  const elapsed = now - lastHistoryUpdate;
+  if (elapsed >= HISTORY_SCROLL_THROTTLE_MS) {
+    if (historyUpdateTimer !== null) {
+      window.clearTimeout(historyUpdateTimer);
+      historyUpdateTimer = null;
+    }
+    lastHistoryUpdate = now;
+    updateHistoryScroll();
+    return;
+  }
+  if (historyUpdateTimer !== null) return;
+  historyUpdateTimer = window.setTimeout(() => {
+    historyUpdateTimer = null;
+    lastHistoryUpdate = Date.now();
+    updateHistoryScroll();
+  }, HISTORY_SCROLL_THROTTLE_MS - elapsed);
 };
 
 const queueScrollRestore = (scrollY: number) => {
@@ -127,7 +154,7 @@ const handleScroll = () => {
   scrollTicking = true;
   requestAnimationFrame(() => {
     scrollTicking = false;
-    updateHistoryScroll();
+    scheduleHistoryScroll();
   });
 };
 
@@ -204,6 +231,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleScroll);
+  if (historyUpdateTimer !== null) {
+    window.clearTimeout(historyUpdateTimer);
+    historyUpdateTimer = null;
+  }
   stopSyncWait();
 });
 
