@@ -1,4 +1,4 @@
-import { deflateSync, gzipSync, inflateSync, ungzipSync } from 'fflate';
+import { deflateSync, gzipSync, inflateSync, gunzipSync } from 'fflate';
 import { errToObj } from '../../lib/core';
 
 type CompressionFormat = 'deflate' | 'gzip';
@@ -36,7 +36,7 @@ const compress = async (payload: Uint8Array, format: CompressionFormat) =>
   format === 'gzip' ? gzipSync(payload) : deflateSync(payload);
 
 const decompress = async (payload: Uint8Array, format: CompressionFormat) =>
-  format === 'gzip' ? ungzipSync(payload) : inflateSync(payload);
+  format === 'gzip' ? gunzipSync(payload) : inflateSync(payload);
 
 const packPayload = async (input: unknown) => {
   if (typeof input === 'string') {
