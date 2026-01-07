@@ -91,31 +91,65 @@ const pendingScrollY = ref<number | null>(null);
 let scrollTicking = false;
 let lastHistoryUpdate = 0;
 let historyUpdateTimer: number | null = null;
-let lastRecordedScrollY: number | null = null;
+let lastRecordedScroll: { view: string; y: number } | null = null;
 const showSyncIndicator = ref(false);
 let syncDelayTimer: number | null = null;
 let syncInteractionListening = false;
 const syncInteractionOptions: AddEventListenerOptions = { capture: true };
 const HISTORY_SCROLL_THROTTLE_MS = 250;
+const SCROLL_STORAGE_KEY = 'daylist.scroll.v1';
+const scrollPositions = new Map<string, number>();
 
 const BASE_ACCENT_LIGHT = '#1f4b99';
 const BASE_ACCENT_DARK = '#6ea8ff';
 
 const getScrollY = () => window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
 
-const ensureHistoryState = (next: 'main' | 'settings' | 'diagnostics', replace = false, scrollY = 0) => {
-  const state = { ...(history.state || {}), view: next, scrollY };
+const getScrollKey = (next: 'main' | 'settings' | 'diagnostics') => `view:${next}`;
+
+const loadScrollPositions = () => {
+  try {
+    const raw = sessionStorage.getItem(SCROLL_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        scrollPositions.set(key, value);
+      }
+    }
+  } catch {
+    // ignore
+  }
+};
+
+const persistScrollPositions = () => {
+  try {
+    const payload: Record<string, number> = {};
+    for (const [key, value] of scrollPositions.entries()) {
+      payload[key] = value;
+    }
+    sessionStorage.setItem(SCROLL_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore
+  }
+};
+
+const readStoredScroll = (next: 'main' | 'settings' | 'diagnostics') => scrollPositions.get(getScrollKey(next)) ?? 0;
+
+const ensureHistoryState = (next: 'main' | 'settings' | 'diagnostics', replace = false) => {
+  const state = { ...(history.state || {}), view: next };
   if (replace) history.replaceState(state, '', window.location.href);
   else history.pushState(state, '', window.location.href);
-  lastRecordedScrollY = scrollY;
 };
 
 const updateHistoryScroll = () => {
-  if (!history.state) return;
+  const currentView = view.value;
   const scrollY = getScrollY();
-  if (lastRecordedScrollY === scrollY) return;
-  lastRecordedScrollY = scrollY;
-  history.replaceState({ ...history.state, scrollY }, '', window.location.href);
+  if (lastRecordedScroll && lastRecordedScroll.view === currentView && lastRecordedScroll.y === scrollY) return;
+  lastRecordedScroll = { view: currentView, y: scrollY };
+  scrollPositions.set(getScrollKey(currentView), scrollY);
+  persistScrollPositions();
 };
 
 const scheduleHistoryScroll = () => {
@@ -197,16 +231,12 @@ const stopSyncWait = () => {
   }
 };
 
-const setView = (next: 'main' | 'settings' | 'diagnostics', fromPop = false, scrollY = 0) => {
+const setView = (next: 'main' | 'settings' | 'diagnostics', fromPop = false) => {
   if (view.value === next) return;
-  if (fromPop) {
-    queueScrollRestore(scrollY);
-  } else {
-    updateHistoryScroll();
-    queueScrollRestore(0);
-  }
+  updateHistoryScroll();
+  queueScrollRestore(fromPop ? readStoredScroll(next) : 0);
   view.value = next;
-  if (!fromPop) ensureHistoryState(next, false, 0);
+  if (!fromPop) ensureHistoryState(next, false);
 };
 
 const navigateTo = (next: 'main' | 'settings' | 'diagnostics') => {
@@ -214,16 +244,17 @@ const navigateTo = (next: 'main' | 'settings' | 'diagnostics') => {
 };
 
 onMounted(() => {
+  loadScrollPositions();
   if ('scrollRestoration' in history) {
     history.scrollRestoration = 'manual';
   }
   const initial = (history.state && history.state.view) || 'main';
   view.value = initial;
-  ensureHistoryState(initial, true, getScrollY());
+  ensureHistoryState(initial, true);
+  updateHistoryScroll();
   window.addEventListener('popstate', (event) => {
     const next = (event.state && event.state.view) || 'main';
-    const scrollY = typeof event.state?.scrollY === 'number' ? event.state.scrollY : 0;
-    setView(next, true, scrollY);
+    setView(next, true);
   });
   window.addEventListener('scroll', handleScroll, { passive: true });
   store.initApp();
